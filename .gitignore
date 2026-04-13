@@ -1,0 +1,17 @@
+# Build outputs
+build/
+bperf
+
+# Generated headers (regenerate with: bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h)
+vmlinux.h
+
+# Test binaries and data
+test_workload
+*.data
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
