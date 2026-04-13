@@ -53,21 +53,17 @@ int proc_read_threads(pid_t pid, struct proc_thread_list *list);
 int proc_add_kernel_map(struct proc_map_list *list);
 
 /*
- * Kernel symbol info for filtering BPF infrastructure frames
- * from off-CPU kernel stacks.
+ * Kernel symbol info for filtering BPF JIT frames from off-CPU
+ * kernel stacks.  The vmlinux core text range (_stext to _etext)
+ * excludes modules and BPF JIT regions.
  */
-#define KERN_MAX_TRAMP_ADDRS 32
-
 struct kern_sym_info {
-	uint64_t text_start;   /* vmlinux text range start */
-	uint64_t text_end;     /* vmlinux text range end (exclusive) */
-	uint64_t tramp_addrs[KERN_MAX_TRAMP_ADDRS]; /* BPF trampoline fn addrs */
-	int      nr_tramp;
+	uint64_t text_start;   /* vmlinux text range start (_stext) */
+	uint64_t text_end;     /* vmlinux text range end (_etext, exclusive) */
 };
 
 /*
- * Read /proc/kallsyms to determine kernel text range and collect
- * addresses of BPF trampoline functions (bpf_trace_run*, __bpf_trace_*).
+ * Read /proc/kallsyms to determine the vmlinux core text range.
  */
 int proc_read_kern_sym_info(struct kern_sym_info *info);
 

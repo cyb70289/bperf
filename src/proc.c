@@ -260,7 +260,7 @@ int proc_add_kernel_map(struct proc_map_list *list)
 	return proc_map_list_append(list, &m);
 }
 
-/* ── Kernel symbol info for BPF frame filtering ──────────────────── */
+/* ── Kernel symbol info for BPF JIT frame filtering ──────────────── */
 
 int proc_read_kern_sym_info(struct kern_sym_info *info)
 {
@@ -286,28 +286,16 @@ int proc_read_kern_sym_info(struct kern_sym_info *info)
 			continue;
 
 		/*
-		 * Use _text/_stext and _etext to determine the vmlinux
-		 * core text range.  This excludes kernel modules and BPF
-		 * JIT regions which lie outside the vmlinux image.
-		 * Using min/max of all T/t symbols would include modules
-		 * and accidentally encompass BPF JIT addresses.
+		 * Use _stext and _etext to determine the vmlinux core text
+		 * range.  This excludes kernel modules and BPF JIT regions
+		 * which lie outside the vmlinux image.  Using min/max of
+		 * all T/t symbols would include modules and accidentally
+		 * encompass BPF JIT addresses.
 		 */
 		if (strcmp(name, "_stext") == 0 && (type == 'T' || type == 't'))
 			stext = addr;
 		if (strcmp(name, "_etext") == 0)
 			etext = addr;
-
-		/* Collect BPF trampoline function addresses:
-		 *   bpf_trace_run*        — kernel BPF trace dispatcher
-		 *   __bpf_trace_sched_*   — auto-generated sched tracepoint stub
-		 */
-		if (info->nr_tramp < KERN_MAX_TRAMP_ADDRS &&
-		    (type == 'T' || type == 't')) {
-			if (strncmp(name, "bpf_trace_run", 13) == 0 ||
-			    strncmp(name, "__bpf_trace_sched_switch", 24) == 0) {
-				info->tramp_addrs[info->nr_tramp++] = addr;
-			}
-		}
 	}
 	fclose(fp);
 

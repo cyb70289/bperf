@@ -178,21 +178,6 @@ static int write_mmap2_record(struct writer_ctx *w,
 
 /* ── Off-CPU → PERF_RECORD_SAMPLE ─────────────────────────────────── */
 
-/*
- * Check if a kernel IP belongs to a BPF trampoline function.
- * We match IPs within 1024 bytes of a known trampoline symbol start,
- * which is generous for these small dispatcher functions.
- */
-static int is_bpf_trampoline_ip(uint64_t ip, const struct kern_sym_info *ki)
-{
-	for (int i = 0; i < ki->nr_tramp; i++) {
-		uint64_t base = ki->tramp_addrs[i];
-		if (ip >= base && ip < base + 1024)
-			return 1;
-	}
-	return 0;
-}
-
 static int write_offcpu_sample(struct writer_ctx *w,
 			       const struct offcpu_event *evt,
 			       const uint64_t *event_ids,
@@ -217,29 +202,21 @@ static int write_offcpu_sample(struct writer_ctx *w,
 	int user_nr = ustack ? ustack->nr_ips : 0;
 
 	/*
-	 * Filter BPF infrastructure frames from the kernel stack.
-	 * The off-CPU stack captured by bpf_get_stackid() includes:
-	 *   [0..N-1]  BPF JIT addresses (outside vmlinux text range)
-	 *   [N..N+1]  bpf_trace_run4, __bpf_trace_sched_switch (trampoline)
-	 *   [N+2..]   __schedule, schedule, ... (real stack)
-	 *
-	 * Skip leading IPs that are either outside the kernel text range
-	 * (BPF JIT) or belong to known BPF trampoline functions.
+	 * Filter BPF JIT frames from the kernel stack.
+	 * bpf_get_stackid() captures BPF JIT return addresses at the
+	 * top of the stack.  These lie outside the vmlinux core text
+	 * range (_stext.._etext) and show as [unknown] in perf report.
+	 * Skip them so the stack starts at a real kernel function.
 	 */
 	int kern_skip = 0;
 	if (kern_info->text_start < kern_info->text_end) {
 		while (kern_skip < kern_nr) {
 			uint64_t ip = kstack->ips[kern_skip];
 			if (ip < kern_info->text_start ||
-			    ip >= kern_info->text_end) {
-				/* Outside vmlinux text = BPF JIT frame */
+			    ip >= kern_info->text_end)
 				kern_skip++;
-			} else if (is_bpf_trampoline_ip(ip, kern_info)) {
-				/* Known BPF trampoline function */
-				kern_skip++;
-			} else {
-				break; /* Real kernel frame */
-			}
+			else
+				break;
 		}
 	}
 	int valid_kern_nr = kern_nr - kern_skip;
