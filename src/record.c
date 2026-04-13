@@ -188,18 +188,25 @@ start_collection:
 
 	/* ── Read /proc info ───────────────────────────────────────── */
 
-	if (opts->pid > 0 && !opts->system_wide) {
+	if (opts->cmd_argc > 0) {
+		/*
+		 * Command mode: the child hasn't exec'd yet (it's blocked
+		 * on the sync pipe that we just closed). Reading /proc now
+		 * would get the parent's (bperf) comm and maps.
+		 * Rely on kernel-generated COMM/MMAP2 records from the perf
+		 * ring buffer instead — they arrive after exec with correct
+		 * timestamps (now that we use CLOCK_MONOTONIC for perf too).
+		 */
+		proc_add_kernel_map(&map_list);
+	} else if (opts->pid > 0 && !opts->system_wide) {
 		proc_read_maps(opts->pid, &map_list);
 		proc_read_threads(opts->pid, &thread_list);
+		proc_add_kernel_map(&map_list);
 	} else {
 		/* System-wide: add kernel mapping */
 		proc_add_kernel_map(&map_list);
 		/* We'll rely on MMAP2/COMM records from perf for processes */
 	}
-
-	/* Always add kernel mapping for callchain resolution */
-	if (opts->pid > 0)
-		proc_add_kernel_map(&map_list);
 
 	/* ── Set up epoll ──────────────────────────────────────────── */
 
@@ -285,7 +292,7 @@ start_collection:
 	offcpu_poll(offcpu, &offcpu_buf, 0);
 
 	/* Re-read /proc info (in case new mappings appeared) */
-	if (opts->pid > 0 && !opts->system_wide) {
+	if (opts->pid > 0 && !opts->system_wide && opts->cmd_argc == 0) {
 		struct proc_map_list new_maps;
 		proc_map_list_init(&new_maps);
 		proc_read_maps(opts->pid, &new_maps);
