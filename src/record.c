@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
+#include <limits.h>
 #include <sys/epoll.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -29,6 +30,76 @@ static void sig_handler(int sig)
 	if (sig == SIGCHLD)
 		g_child_exited = 1;
 	g_stop = 1;
+}
+
+/*
+ * Generate an SVG flamegraph from the perf.data output.
+ *
+ * Resolves the bundled FlameGraph scripts relative to the bperf binary
+ * using /proc/self/exe, then runs:
+ *   perf script -i <data> | stackcollapse-perf.pl --all | flamegraph.pl > <data>.svg
+ *
+ * Returns 0 on success, -1 on failure (non-fatal — perf.data is already written).
+ */
+static int run_flamegraph_pipeline(const char *data_path)
+{
+	char exe_path[PATH_MAX];
+	ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+	if (len < 0) {
+		fprintf(stderr, "bperf: flamegraph: cannot resolve /proc/self/exe: %s\n",
+			strerror(errno));
+		return -1;
+	}
+	exe_path[len] = '\0';
+
+	/* Strip binary name to get directory */
+	char *slash = strrchr(exe_path, '/');
+	if (slash)
+		*(slash + 1) = '\0';
+	else
+		strcpy(exe_path, "./");
+
+	/* Build paths to bundled scripts */
+	char collapse_path[PATH_MAX];
+	char flamegraph_path[PATH_MAX];
+	snprintf(collapse_path, sizeof(collapse_path),
+		 "%sflamegraph/stackcollapse-perf.pl", exe_path);
+	snprintf(flamegraph_path, sizeof(flamegraph_path),
+		 "%sflamegraph/flamegraph.pl", exe_path);
+
+	/* Verify scripts exist */
+	if (access(collapse_path, X_OK) != 0) {
+		fprintf(stderr, "bperf: flamegraph: %s not found or not executable\n",
+			collapse_path);
+		return -1;
+	}
+	if (access(flamegraph_path, X_OK) != 0) {
+		fprintf(stderr, "bperf: flamegraph: %s not found or not executable\n",
+			flamegraph_path);
+		return -1;
+	}
+
+	/* Build the SVG output path */
+	char svg_path[PATH_MAX];
+	snprintf(svg_path, sizeof(svg_path), "%s.svg", data_path);
+
+	/* Build and run the pipeline */
+	char cmd[PATH_MAX * 4];
+	snprintf(cmd, sizeof(cmd),
+		 "perf script -i '%s' | '%s' --all | '%s' > '%s'",
+		 data_path, collapse_path, flamegraph_path, svg_path);
+
+	fprintf(stderr, "bperf: generating flamegraph...\n");
+	int rc = system(cmd);
+	if (rc != 0) {
+		fprintf(stderr, "bperf: flamegraph pipeline failed (exit %d)\n", rc);
+		/* Remove empty/partial SVG */
+		unlink(svg_path);
+		return -1;
+	}
+
+	fprintf(stderr, "bperf: flamegraph written to %s\n", svg_path);
+	return 0;
 }
 
 int record_run(struct record_opts *opts)
@@ -365,10 +436,13 @@ start_collection:
 
 	ret = writer_write(&wp, &oncpu_buf, &offcpu_buf, &stack_map,
 			   &map_list, &thread_list);
-	if (ret == 0)
+	if (ret == 0) {
 		fprintf(stderr, "bperf: output written to %s\n", opts->output);
-	else
+		if (opts->flamegraph)
+			run_flamegraph_pipeline(opts->output);
+	} else {
 		fprintf(stderr, "bperf: failed to write output\n");
+	}
 
 out:
 	if (epoll_fd >= 0)

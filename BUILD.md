@@ -141,3 +141,38 @@ perf report -i system.data --stdio | head -40
   `-fno-omit-frame-pointer`. The test workload already uses this flag.
 - **Kernel symbols**: If `perf report` shows `[unknown]` for kernel symbols,
   run `echo 0 | sudo tee /proc/sys/kernel/kptr_restrict`.
+
+## Flamegraph Support
+
+bperf can generate an SVG flamegraph directly via the `--flamegraph` flag.
+This uses the bundled [FlameGraph](https://github.com/brendangregg/FlameGraph)
+scripts in the `flamegraph/` directory (no separate install needed).
+
+**Requirements:** `perl` (for the FlameGraph scripts) and `perf` (for `perf script`).
+
+### Usage
+
+```bash
+# Command-launch mode with flamegraph
+sudo ./bperf record --flamegraph -F 99 -o bperf.data -- ./test_workload
+
+# Profile a PID with flamegraph
+sudo ./bperf record --flamegraph -p 1234 -d 10 -o bperf.data
+
+# System-wide with flamegraph
+sudo ./bperf record --flamegraph -a -d 5 -o system.data
+```
+
+`--flamegraph` implies `--combined`, merging all on-CPU and off-CPU events
+into a single "wall-clock" event for a unified flamegraph. The output SVG is
+written next to the perf.data file (e.g. `bperf.data.svg`).
+
+### Bundled scripts
+
+The `flamegraph/` directory contains:
+
+- `stackcollapse-perf.pl` — collapses `perf script` output into folded stacks
+- `flamegraph.pl` — renders folded stacks as an interactive SVG
+
+These are from Brendan Gregg's
+[FlameGraph](https://github.com/brendangregg/FlameGraph) project (CDDL-1.0 license).
