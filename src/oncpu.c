@@ -12,6 +12,7 @@
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
 #include <linux/perf_event.h>
+#include <time.h>
 #include <poll.h>
 
 #include "oncpu.h"
@@ -138,6 +139,8 @@ struct oncpu_ctx *oncpu_open(const struct oncpu_params *params)
 	attr->exclude_kernel = params->exclude_kernel ? 1 : 0;
 	attr->sample_max_stack = params->max_stack;
 	attr->wakeup_events  = 1;
+	attr->use_clockid    = 1;
+	attr->clockid        = CLOCK_MONOTONIC;
 
 	int nr_cpus = sysconf(_SC_NPROCESSORS_ONLN);
 	size_t page_size = sysconf(_SC_PAGESIZE);

@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <time.h>
 #include <linux/perf_event.h>
 
 #include "writer.h"
@@ -604,12 +605,13 @@ write_features:;
 	/* ── 7. Write feature sections ─────────────────────────────── */
 
 	/*
-	 * Features we write: EVENT_DESC, CMDLINE, SAMPLE_TIME
+	 * Features we write: CMDLINE, EVENT_DESC, SAMPLE_TIME, CLOCKID
 	 * Each feature has a perf_file_section (offset, size) entry in
 	 * the feature header area, followed by the feature data.
 	 *
 	 * Features must be written in bit order.
-	 * CMDLINE = bit 11, EVENT_DESC = bit 12, SAMPLE_TIME = bit 21
+	 * CMDLINE = bit 11, EVENT_DESC = bit 12, SAMPLE_TIME = bit 21,
+	 * CLOCKID = bit 23
 	 *
 	 * Feature section headers (perf_file_section) come first (in bit
 	 * order), then the actual feature data follows.
@@ -620,10 +622,11 @@ write_features:;
 	fhdr.adds_features[0] |= (1ULL << HEADER_CMDLINE);
 	fhdr.adds_features[0] |= (1ULL << HEADER_EVENT_DESC);
 	fhdr.adds_features[0] |= (1ULL << HEADER_SAMPLE_TIME);
+	fhdr.adds_features[0] |= (1ULL << HEADER_CLOCKID);
 
-	/* Feature header area: 3 perf_file_section entries (in bit order) */
+	/* Feature header area: 4 perf_file_section entries (in bit order) */
 	uint64_t feat_hdr_offset = w.offset;
-	struct perf_file_section feat_sections[3];
+	struct perf_file_section feat_sections[4];
 	memset(feat_sections, 0, sizeof(feat_sections));
 
 	/* Write placeholder feature section headers */
@@ -654,6 +657,14 @@ write_features:;
 	feat_sections[2].offset = w.offset;
 	write_sample_time(&w, first_time, last_time);
 	feat_sections[2].size = w.offset - feat_sections[2].offset;
+
+	/* Feature 3 (bit 23): CLOCKID */
+	feat_sections[3].offset = w.offset;
+	{
+		uint64_t clockid_val = CLOCK_MONOTONIC;
+		wr_u64(&w, clockid_val);
+	}
+	feat_sections[3].size = w.offset - feat_sections[3].offset;
 
 	/* Patch feature section headers */
 	wr_seek(&w, feat_hdr_offset);
