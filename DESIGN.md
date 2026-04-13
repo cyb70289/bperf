@@ -61,12 +61,12 @@ capability with:
 
 | Requirement             | Version / Config                          |
 |-------------------------|-------------------------------------------|
-| Linux kernel            | 6.1+ (LTS) with BTF enabled              |
+| Linux kernel            | 6.1+ (LTS) with BTF enabled               |
 | `CONFIG_DEBUG_INFO_BTF` | `=y` (required for CO-RE and `tp_btf`)    |
 | `CONFIG_BPF_SYSCALL`    | `=y`                                      |
 | libbpf                  | 1.0+                                      |
 | clang/llvm              | 14+ (for BPF CO-RE compilation)           |
-| Frame pointers           | Recommended for user-space stack accuracy |
+| Frame pointers          | Recommended for user-space stack accuracy |
 
 ---
 
@@ -109,11 +109,11 @@ to classify the off-CPU reason:
 
 | Subclass                           | Condition                                   |
 |------------------------------------|---------------------------------------------|
-| `PERF_EVENT_OFFCPU_SCHED` (0x1)   | `prev_state == TASK_RUNNING` (preempted)    |
-| `PERF_EVENT_OFFCPU_IOWAIT` (0x2)  | `in_iowait` flag is set                     |
+| `PERF_EVENT_OFFCPU_SCHED` (0x1)    | `prev_state == TASK_RUNNING` (preempted)    |
+| `PERF_EVENT_OFFCPU_IOWAIT` (0x2)   | `in_iowait` flag is set                     |
 | `PERF_EVENT_OFFCPU_INTERRUPTIBLE` (0x4) | `TASK_INTERRUPTIBLE`                   |
-| `PERF_EVENT_OFFCPU_UNINTERRUPTIBLE` (0x8) | `TASK_UNINTERRUPTIBLE`             |
-| `PERF_EVENT_OFFCPU_ETC` (0x10)    | Everything else (STOPPED, TRACED, etc.)     |
+| `PERF_EVENT_OFFCPU_UNINTERRUPTIBLE` (0x8) | `TASK_UNINTERRUPTIBLE`               |
+| `PERF_EVENT_OFFCPU_ETC` (0x10)     | Everything else (STOPPED, TRACED, etc.)     |
 
 **eBPF equivalent:** Read `prev_state` from the `sched_switch` tracepoint args
 and `prev->in_iowait` via BTF/CO-RE.
@@ -125,8 +125,8 @@ Bits 3-5 of `perf_event_header::misc` encode the subclass:
 ```c
 #define PERF_RECORD_MISC_OFFCPU_SCHED           (1 << 3)
 #define PERF_RECORD_MISC_OFFCPU_IOWAIT          (2 << 3)
-#define PERF_RECORD_MISC_OFFCPU_INTERRUPTIBLE    (3 << 3)
-#define PERF_RECORD_MISC_OFFCPU_UNINTERRUPTIBLE  (4 << 3)
+#define PERF_RECORD_MISC_OFFCPU_INTERRUPTIBLE   (3 << 3)
+#define PERF_RECORD_MISC_OFFCPU_UNINTERRUPTIBLE (4 << 3)
 #define PERF_RECORD_MISC_OFFCPU_ETC             (5 << 3)
 ```
 
@@ -173,7 +173,7 @@ same stack — the user code path that led to the blocking syscall.
 | `misc` bits encoding                 | Separate perf.data event attrs per subclass   |
 | Sample injection at sched-in         | BPF emits event via ring buffer at `sched_switch` |
 | Stack capture via `task_pt_regs`     | `bpf_get_stackid()` at sched-out time         |
-| `try_to_wake_up` hook               | `tp_btf/sched_wakeup` (optional, for future)  |
+| `try_to_wake_up` hook                | `tp_btf/sched_wakeup` (optional, for future)  |
 | Context switch interference guard    | Not needed (BPF is non-invasive)              |
 
 ---
@@ -213,7 +213,7 @@ same stack — the user code path that led to the blocking syscall.
 └────────────────────┼───────────────────────────────────┼────────────┘
                      │                                   │
 ┌────────────────────┼───────────────────────────────────┼────────────┐
-│                    ▼         User Space                 ▼            │
+│                    ▼         User Space                ▼            │
 │  ┌─────────────────────────────────────────────────────────────────┐│
 │  │                     bperf record                                ││
 │  │                                                                 ││
@@ -233,7 +233,7 @@ same stack — the user code path that led to the blocking syscall.
 │                            │                                        │
 │               ┌────────────┼────────────┐                           │
 │               ▼            ▼            ▼                           │
-│         perf report   perf script   FlameGraph                     │
+│         perf report   perf script   FlameGraph                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -256,23 +256,23 @@ same stack — the user code path that led to the blocking syscall.
 
 ### 3.3 BPF Maps
 
-| Map Name         | Type                        | Key             | Value                     | Purpose                                  |
-|------------------|-----------------------------|-----------------|---------------------------|------------------------------------------|
+| Map Name         | Type                        | Key             | Value                      | Purpose                                        |
+|------------------|-----------------------------|-----------------|----------------------------|------------------------------------------------|
 | `task_storage`   | `BPF_MAP_TYPE_TASK_STORAGE` | (implicit task) | `struct task_offcpu_data`  | Per-task sched-out timestamp, subclass, stacks |
-| `stack_traces`   | `BPF_MAP_TYPE_STACK_TRACE`  | `u32` stack ID  | `u64[PERF_MAX_STACK_DEPTH]`| Deduplicated stack traces                |
-| `events`         | `BPF_MAP_TYPE_RINGBUF`      | —               | `struct offcpu_event`      | Off-CPU events sent to userspace         |
-| `config`         | `BPF_MAP_TYPE_ARRAY`        | `u32` index     | `struct bperf_config`      | Runtime configuration from userspace     |
+| `stack_traces`   | `BPF_MAP_TYPE_STACK_TRACE`  | `u32` stack ID  | `u64[PERF_MAX_STACK_DEPTH]`| Deduplicated stack traces                      |
+| `events`         | `BPF_MAP_TYPE_RINGBUF`      | —               | `struct offcpu_event`      | Off-CPU events sent to userspace               |
+| `config`         | `BPF_MAP_TYPE_ARRAY`        | `u32` index     | `struct bperf_config`      | Runtime configuration from userspace           |
 
 ### 3.4 Filtering Strategy
 
 The BPF program must efficiently filter which tasks to profile. Supported modes:
 
-| Mode             | Mechanism                                           |
-|------------------|-----------------------------------------------------|
-| Single process   | Compare `prev->tgid` / `next->tgid` against target PID in `config` map |
+| Mode             | Mechanism                                                                      |
+|------------------|--------------------------------------------------------------------------------|
+| Single process   | Compare `prev->tgid` / `next->tgid` against target PID in `config` map         |
 | System-wide      | Profile all tasks (no filter, or exclude kernel threads via `tgid == 0` check) |
-| Cgroup           | Use `bpf_current_task_under_cgroup()` helper or compare cgroup ID |
-| Thread list      | Hash map of target TIDs                             |
+| Cgroup           | Use `bpf_current_task_under_cgroup()` helper or compare cgroup ID              |
+| Thread list      | Hash map of target TIDs                                                        |
 
 ---
 
@@ -531,8 +531,8 @@ RECORD OPTIONS:
     -p, --pid <PID>         Profile a specific process (and all its threads)
     -a, --all-cpus          System-wide profiling (default if no -p or command)
     -F, --freq <HZ>         On-CPU sampling frequency [default: 99]
-    -g, --call-graph         Record call graphs (always enabled, this is default)
-    --no-kernel              Exclude kernel call chains
+    -g, --call-graph        Record call graphs (always enabled, this is default)
+    --no-kernel             Exclude kernel call chains
     --min-block <USEC>      Minimum off-CPU duration to record [default: 1]
     -d, --duration <SEC>    Recording duration in seconds [default: until Ctrl-C]
     -o, --output <FILE>     Output file [default: bperf.data]
@@ -846,7 +846,7 @@ static void write_offcpu_sample(struct perf_data_writer *w,
              + 8                    /* PERF_SAMPLE_TIME */
              + 8                    /* PERF_SAMPLE_CPU (cpu + res) */
              + 8                    /* PERF_SAMPLE_PERIOD */
-             + 8 + cc_nr * 8       /* PERF_SAMPLE_CALLCHAIN (nr + ips) */
+             + 8 + cc_nr * 8        /* PERF_SAMPLE_CALLCHAIN (nr + ips) */
              + 8;                   /* PERF_SAMPLE_WEIGHT */
 
     /* Ensure 8-byte alignment */
@@ -861,7 +861,7 @@ static void write_offcpu_sample(struct perf_data_writer *w,
     write_bytes(w, &hdr, sizeof(hdr));
     write_u64(w, event_id);                             /* identifier */
     write_u64(w, ip);                                   /* ip */
-    write_u32(w, evt->pid); write_u32(w, evt->tid);    /* pid, tid */
+    write_u32(w, evt->pid); write_u32(w, evt->tid);     /* pid, tid */
     write_u64(w, evt->sched_out_ts);                    /* time */
     write_u32(w, evt->cpu); write_u32(w, 0);            /* cpu, res */
     write_u64(w, evt->duration_ns);                     /* period = off-CPU time */
@@ -945,14 +945,14 @@ Total: `72 + 8*nr` bytes per sample (before 8-byte alignment padding).
 Six `perf_event_attr` entries, differentiated by their event IDs and described
 by the `HEADER_EVENT_DESC` feature section:
 
-| Index | Event Name               | Event ID | config            | Purpose              |
-|-------|--------------------------|----------|-------------------|----------------------|
-| 0     | `task-clock`             | (kernel) | `SW_TASK_CLOCK`   | On-CPU samples       |
-| 1     | `offcpu-sched`           | 1001     | `SW_TASK_CLOCK`*  | Off-CPU: runqueue    |
-| 2     | `offcpu-iowait`          | 1002     | `SW_TASK_CLOCK`*  | Off-CPU: I/O wait    |
-| 3     | `offcpu-interruptible`   | 1003     | `SW_TASK_CLOCK`*  | Off-CPU: voluntary   |
-| 4     | `offcpu-uninterruptible` | 1004     | `SW_TASK_CLOCK`*  | Off-CPU: involuntary |
-| 5     | `offcpu-other`           | 1005     | `SW_TASK_CLOCK`*  | Off-CPU: misc        |
+| Index | Event Name               | Event ID | config             | Purpose              |
+|-------|--------------------------|----------|--------------------|----------------------|
+| 0     | `task-clock`             | (kernel) | `SW_TASK_CLOCK`    | On-CPU samples       |
+| 1     | `offcpu-sched`           | 1001     | `SW_TASK_CLOCK`\*  | Off-CPU: runqueue    |
+| 2     | `offcpu-iowait`          | 1002     | `SW_TASK_CLOCK`\*  | Off-CPU: I/O wait    |
+| 3     | `offcpu-interruptible`   | 1003     | `SW_TASK_CLOCK`\*  | Off-CPU: voluntary   |
+| 4     | `offcpu-uninterruptible` | 1004     | `SW_TASK_CLOCK`\*  | Off-CPU: involuntary |
+| 5     | `offcpu-other`           | 1005     | `SW_TASK_CLOCK`\*  | Off-CPU: misc        |
 
 > \* Off-CPU attrs reuse `type=PERF_TYPE_SOFTWARE, config=PERF_COUNT_SW_TASK_CLOCK`
 > since the underlying event type doesn't matter for a synthetic file — only the
@@ -969,10 +969,10 @@ unique IDs (1001-1005).
 struct perf_file_header header = {
     .magic      = 0x32454C4946524550ULL,  /* "PERFILE2" */
     .size       = 104,
-    .attr_size  = sizeof(struct perf_event_attr) + 16, /* attr + ids section */
+    .attr_size  = sizeof(struct perf_event_attr) + 16,  /* attr + ids section */
     .attrs      = { .offset = attrs_offset, .size = 6 * attr_size },
     .data       = { .offset = data_offset,  .size = data_size },
-    .event_types = { 0, 0 },              /* legacy, unused */
+    .event_types = { 0, 0 },   /* legacy, unused */
 };
 /* Set feature bits for EVENT_DESC, CMDLINE, SAMPLE_TIME */
 header.adds_features[0] |= (1 << HEADER_EVENT_DESC);
@@ -987,12 +987,12 @@ This feature maps attr indices to human-readable event names. It enables
 
 ```
 Format:
-    u32 nr_events;                          /* 6 */
+    u32 nr_events;                           /* 6 */
     for each event:
-        struct perf_event_attr attr;        /* copy of the attr */
-        u32 nr_ids;                         /* number of IDs for this attr */
-        u64 ids[nr_ids];                    /* the event IDs */
-        u32 event_string_len;              /* including NUL */
+        struct perf_event_attr attr;         /* copy of the attr */
+        u32 nr_ids;                          /* number of IDs for this attr */
+        u64 ids[nr_ids];                     /* the event IDs */
+        u32 event_string_len;                /* including NUL */
         char event_string[event_string_len]; /* e.g., "offcpu-sched" */
 ```
 

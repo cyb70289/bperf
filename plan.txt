@@ -1,5 +1,5 @@
 Study below docs and patches about bperf(blocked_samples). Summarize the kernel changes.
-And investigate if eBPF can achieve same purpose on latest kernel(with eBPF scheduler plugin) without kernel changes.
+And investigate if eBPF can achieve same purpose on latest kernel without kernel changes.
 
 bperf intro
 - https://github.com/s3yonsei/blocked_samples
