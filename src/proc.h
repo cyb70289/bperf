@@ -52,6 +52,25 @@ int proc_read_threads(pid_t pid, struct proc_thread_list *list);
 /* Add a kernel ([kernel.kallsyms]) mapping entry. */
 int proc_add_kernel_map(struct proc_map_list *list);
 
+/*
+ * Kernel symbol info for filtering BPF infrastructure frames
+ * from off-CPU kernel stacks.
+ */
+#define KERN_MAX_TRAMP_ADDRS 32
+
+struct kern_sym_info {
+	uint64_t text_start;   /* vmlinux text range start */
+	uint64_t text_end;     /* vmlinux text range end (exclusive) */
+	uint64_t tramp_addrs[KERN_MAX_TRAMP_ADDRS]; /* BPF trampoline fn addrs */
+	int      nr_tramp;
+};
+
+/*
+ * Read /proc/kallsyms to determine kernel text range and collect
+ * addresses of BPF trampoline functions (bpf_trace_run*, __bpf_trace_*).
+ */
+int proc_read_kern_sym_info(struct kern_sym_info *info);
+
 /* Free helpers */
 void proc_map_list_init(struct proc_map_list *list);
 void proc_map_list_free(struct proc_map_list *list);

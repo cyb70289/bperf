@@ -27,6 +27,7 @@ struct writer_params {
 	int                      combined;         /* merge all events into one */
 	int                      argc;             /* for HEADER_CMDLINE */
 	char                   **argv;
+	struct kern_sym_info     kern_info;         /* for BPF frame filtering */
 };
 
 /* Write a complete perf.data file. Returns 0 on success. */

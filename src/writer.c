@@ -178,10 +178,26 @@ static int write_mmap2_record(struct writer_ctx *w,
 
 /* ── Off-CPU → PERF_RECORD_SAMPLE ─────────────────────────────────── */
 
+/*
+ * Check if a kernel IP belongs to a BPF trampoline function.
+ * We match IPs within 1024 bytes of a known trampoline symbol start,
+ * which is generous for these small dispatcher functions.
+ */
+static int is_bpf_trampoline_ip(uint64_t ip, const struct kern_sym_info *ki)
+{
+	for (int i = 0; i < ki->nr_tramp; i++) {
+		uint64_t base = ki->tramp_addrs[i];
+		if (ip >= base && ip < base + 1024)
+			return 1;
+	}
+	return 0;
+}
+
 static int write_offcpu_sample(struct writer_ctx *w,
 			       const struct offcpu_event *evt,
 			       const uint64_t *event_ids,
-			       const struct resolved_stack_map *stacks)
+			       const struct resolved_stack_map *stacks,
+			       const struct kern_sym_info *kern_info)
 {
 	/* Select event ID based on subclass */
 	uint64_t event_id;
@@ -200,10 +216,38 @@ static int write_offcpu_sample(struct writer_ctx *w,
 	int kern_nr = kstack ? kstack->nr_ips : 0;
 	int user_nr = ustack ? ustack->nr_ips : 0;
 
+	/*
+	 * Filter BPF infrastructure frames from the kernel stack.
+	 * The off-CPU stack captured by bpf_get_stackid() includes:
+	 *   [0..N-1]  BPF JIT addresses (outside vmlinux text range)
+	 *   [N..N+1]  bpf_trace_run4, __bpf_trace_sched_switch (trampoline)
+	 *   [N+2..]   __schedule, schedule, ... (real stack)
+	 *
+	 * Skip leading IPs that are either outside the kernel text range
+	 * (BPF JIT) or belong to known BPF trampoline functions.
+	 */
+	int kern_skip = 0;
+	if (kern_info->text_start < kern_info->text_end) {
+		while (kern_skip < kern_nr) {
+			uint64_t ip = kstack->ips[kern_skip];
+			if (ip < kern_info->text_start ||
+			    ip >= kern_info->text_end) {
+				/* Outside vmlinux text = BPF JIT frame */
+				kern_skip++;
+			} else if (is_bpf_trampoline_ip(ip, kern_info)) {
+				/* Known BPF trampoline function */
+				kern_skip++;
+			} else {
+				break; /* Real kernel frame */
+			}
+		}
+	}
+	int valid_kern_nr = kern_nr - kern_skip;
+
 	/* Build callchain: [CONTEXT_KERNEL, kips..., CONTEXT_USER, uips...] */
 	int cc_nr = 0;
-	if (kern_nr > 0)
-		cc_nr += 1 + kern_nr; /* context marker + IPs */
+	if (valid_kern_nr > 0)
+		cc_nr += 1 + valid_kern_nr; /* context marker + IPs */
 	if (user_nr > 0)
 		cc_nr += 1 + user_nr;
 
@@ -213,8 +257,8 @@ static int write_offcpu_sample(struct writer_ctx *w,
 	if (user_nr > 0) {
 		ip = ustack->ips[0];
 		misc = PERF_RECORD_MISC_USER;
-	} else if (kern_nr > 0) {
-		ip = kstack->ips[0];
+	} else if (valid_kern_nr > 0) {
+		ip = kstack->ips[kern_skip];
 		misc = PERF_RECORD_MISC_KERNEL;
 	}
 
@@ -244,10 +288,10 @@ static int write_offcpu_sample(struct writer_ctx *w,
 	wr_u64(w, (uint64_t)cc_nr);     /* callchain nr */
 
 	/* Callchain IPs */
-	if (kern_nr > 0) {
+	if (valid_kern_nr > 0) {
 		wr_u64(w, PERF_CONTEXT_KERNEL);
-		for (int i = 0; i < kern_nr; i++)
-			wr_u64(w, kstack->ips[i]);
+		for (int i = 0; i < valid_kern_nr; i++)
+			wr_u64(w, kstack->ips[kern_skip + i]);
 	}
 	if (user_nr > 0) {
 		wr_u64(w, PERF_CONTEXT_USER);
@@ -580,7 +624,8 @@ int writer_write(const struct writer_params *params,
 			/* Off-CPU: synthesize PERF_RECORD_SAMPLE */
 			struct offcpu_event *evt =
 				&offcpu_events->entries[ref->index];
-			write_offcpu_sample(&w, evt, event_ids, stacks);
+			write_offcpu_sample(&w, evt, event_ids, stacks,
+					    &params->kern_info);
 		}
 	}
 	free(refs);

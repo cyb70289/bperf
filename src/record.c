@@ -349,6 +349,9 @@ start_collection:
 
 	/* ── Write perf.data ───────────────────────────────────────── */
 
+	struct kern_sym_info kern_info;
+	proc_read_kern_sym_info(&kern_info);
+
 	struct writer_params wp = {
 		.output_path = opts->output,
 		.oncpu_attr = oncpu_get_attr(oncpu),
@@ -356,6 +359,7 @@ start_collection:
 		.combined = opts->combined,
 		.argc = opts->prog_argc,
 		.argv = opts->prog_argv,
+		.kern_info = kern_info,
 	};
 	oncpu_get_event_ids(oncpu, &wp.oncpu_event_ids, &wp.nr_oncpu_ids);
 
