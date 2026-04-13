@@ -24,6 +24,7 @@ struct writer_params {
 	uint64_t                 oncpu_event_id;   /* first kernel-assigned ID */
 	const uint64_t          *oncpu_event_ids;  /* all per-CPU IDs (system-wide) */
 	int                      nr_oncpu_ids;     /* count of IDs */
+	int                      combined;         /* merge all events into one */
 	int                      argc;             /* for HEADER_CMDLINE */
 	char                   **argv;
 };

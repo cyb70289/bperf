@@ -3,8 +3,7 @@
  * writer.c - perf.data file writer
  *
  * Writes a valid perf.data file with:
- *   - File header (104 bytes)
- *   - 6 event attrs + ID arrays
+ *   - 6 event attrs + ID arrays (default), or 1 "wall-clock" attr (--combined)
  *   - COMM, MMAP2, and SAMPLE records (merged, time-sorted)
  *   - Feature sections (EVENT_DESC, CMDLINE, SAMPLE_TIME)
  */
@@ -287,6 +286,7 @@ struct event_id_info {
 static int write_event_desc(struct writer_ctx *w,
 			    const struct perf_event_attr attrs[],
 			    const struct event_id_info id_info[],
+			    const char * const names[],
 			    int nr_events)
 {
 	/* nr_events (4) + attr_size (4) */
@@ -303,7 +303,7 @@ static int write_event_desc(struct writer_ctx *w,
 	for (int i = 0; i < nr_events; i++) {
 		wr_bytes(w, &attrs[i], attrs[i].size);
 		wr_u32(w, id_info[i].nr);
-		wr_perf_string(w, bperf_event_names[i]);
+		wr_perf_string(w, names[i]);
 		for (int j = 0; j < id_info[i].nr; j++)
 			wr_u64(w, id_info[i].ids[j]);
 	}
@@ -407,10 +407,7 @@ int writer_write(const struct writer_params *params,
 	 * Build per-attr ID info for writing attrs and EVENT_DESC.
 	 * attr[0] has nr_oncpu_ids IDs; attrs[1..5] have 1 ID each.
 	 */
-	struct {
-		const uint64_t *ids;
-		int nr;
-	} attr_ids[BPERF_NR_EVENTS];
+	struct event_id_info attr_ids[BPERF_NR_EVENTS];
 
 	attr_ids[0].ids = oncpu_ids;
 	attr_ids[0].nr  = nr_oncpu_ids;
@@ -424,6 +421,33 @@ int writer_write(const struct writer_params *params,
 	event_ids[0] = oncpu_ids[0];
 	for (int i = 1; i < BPERF_NR_EVENTS; i++)
 		event_ids[i] = offcpu_ids[i - 1];
+
+	/* ── Combined mode: collapse all events into one ───────────── */
+
+	int nr_events;
+	struct event_id_info *write_id_info;
+	uint64_t *combined_ids = NULL;
+	struct event_id_info combined_id_info;
+
+	if (params->combined) {
+		nr_events = 1;
+		int nr_combined = nr_oncpu_ids + 5;
+		combined_ids = malloc(nr_combined * sizeof(uint64_t));
+		if (!combined_ids) {
+			close(fd);
+			return -1;
+		}
+		memcpy(combined_ids, oncpu_ids,
+		       nr_oncpu_ids * sizeof(uint64_t));
+		for (int i = 0; i < 5; i++)
+			combined_ids[nr_oncpu_ids + i] = offcpu_ids[i];
+		combined_id_info.ids = combined_ids;
+		combined_id_info.nr = nr_combined;
+		write_id_info = &combined_id_info;
+	} else {
+		nr_events = BPERF_NR_EVENTS;
+		write_id_info = attr_ids;
+	}
 
 	/* ── 2. Write placeholder file header ──────────────────────── */
 
@@ -447,25 +471,25 @@ int writer_write(const struct writer_params *params,
 	 * IDs come right after all attr entries. Compute offsets.
 	 */
 	uint64_t per_attr_size = attrs[0].size + sizeof(struct perf_file_section);
-	uint64_t ids_start = attrs_offset + BPERF_NR_EVENTS * per_attr_size;
+	uint64_t ids_start = attrs_offset + (uint64_t)nr_events * per_attr_size;
 
 	/* Compute per-attr ID offsets */
 	uint64_t id_offset = ids_start;
-	for (int i = 0; i < BPERF_NR_EVENTS; i++) {
+	for (int i = 0; i < nr_events; i++) {
 		wr_bytes(&w, &attrs[i], attrs[i].size);
 		struct perf_file_section ids_sec = {
 			.offset = id_offset,
-			.size = attr_ids[i].nr * sizeof(uint64_t),
+			.size = write_id_info[i].nr * sizeof(uint64_t),
 		};
 		wr_bytes(&w, &ids_sec, sizeof(ids_sec));
-		id_offset += attr_ids[i].nr * sizeof(uint64_t);
+		id_offset += write_id_info[i].nr * sizeof(uint64_t);
 	}
 
 	/* ── 4. Write ID arrays ────────────────────────────────────── */
 
-	for (int i = 0; i < BPERF_NR_EVENTS; i++)
-		for (int j = 0; j < attr_ids[i].nr; j++)
-			wr_u64(&w, attr_ids[i].ids[j]);
+	for (int i = 0; i < nr_events; i++)
+		for (int j = 0; j < write_id_info[i].nr; j++)
+			wr_u64(&w, write_id_info[i].ids[j]);
 
 	/* ── 5. Data section ───────────────────────────────────────── */
 
@@ -618,12 +642,11 @@ write_features:;
 	/* Feature 1 (bit 12): EVENT_DESC */
 	feat_sections[1].offset = w.offset;
 	{
-		struct event_id_info id_info[BPERF_NR_EVENTS];
-		for (int i = 0; i < BPERF_NR_EVENTS; i++) {
-			id_info[i].ids = attr_ids[i].ids;
-			id_info[i].nr  = attr_ids[i].nr;
-		}
-		write_event_desc(&w, attrs, id_info, BPERF_NR_EVENTS);
+		const char * const *names = params->combined
+			? &bperf_combined_event_name
+			: bperf_event_names;
+		write_event_desc(&w, attrs, write_id_info, names,
+				 nr_events);
 	}
 	feat_sections[1].size = w.offset - feat_sections[1].offset;
 
@@ -639,7 +662,7 @@ write_features:;
 	/* ── 8. Patch file header ──────────────────────────────────── */
 
 	fhdr.attrs.offset = attrs_offset;
-	fhdr.attrs.size = BPERF_NR_EVENTS * per_attr_size;
+	fhdr.attrs.size = nr_events * per_attr_size;
 	fhdr.data.offset = data_offset;
 	fhdr.data.size = data_size;
 	fhdr.event_types.offset = 0;
@@ -648,6 +671,7 @@ write_features:;
 	wr_seek(&w, 0);
 	wr_bytes(&w, &fhdr, sizeof(fhdr));
 
+	free(combined_ids);
 	close(fd);
 
 	return 0;

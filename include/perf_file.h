@@ -112,7 +112,7 @@ struct perf_file_header {
 /* Number of event attributes (1 on-CPU + 5 off-CPU subclasses) */
 #define BPERF_NR_EVENTS  6
 
-/* Event name strings (only used in writer.c) */
+/* Event name strings indexed by attr index (default 6-event mode) */
 static const char * const bperf_event_names[BPERF_NR_EVENTS]
 	__attribute__((unused)) = {
 	"task-clock",
@@ -122,5 +122,9 @@ static const char * const bperf_event_names[BPERF_NR_EVENTS]
 	"offcpu-uninterruptible",
 	"offcpu-other",
 };
+
+/* Event name for combined (single-event) mode */
+static const char * const bperf_combined_event_name
+	__attribute__((unused)) = "wall-clock";
 
 #endif /* PERF_FILE_H */

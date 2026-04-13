@@ -15,6 +15,7 @@ struct record_opts {
 	int     duration_sec;   /* -d, 0 = until Ctrl-C */
 	int     max_stack;      /* --stack-depth */
 	int     ringbuf_mb;     /* --ringbuf-size (MB) */
+	int     combined;       /* --combined: single wall-clock event */
 	char   *output;         /* -o output file */
 	int     cmd_argc;       /* command args after -- */
 	char  **cmd_argv;

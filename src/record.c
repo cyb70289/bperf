@@ -346,6 +346,7 @@ start_collection:
 		.output_path = opts->output,
 		.oncpu_attr = oncpu_get_attr(oncpu),
 		.oncpu_event_id = oncpu_get_event_id(oncpu),
+		.combined = opts->combined,
 		.argc = opts->prog_argc,
 		.argv = opts->prog_argv,
 	};
