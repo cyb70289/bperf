@@ -2,64 +2,20 @@
 
 ## Table of Contents
 
-1. [Introduction](#1-introduction)
+1. [Overview](#1-overview)
 2. [Architecture](#2-architecture)
 3. [BPF Program](#3-bpf-program)
 4. [Userspace Tool](#4-userspace-tool)
 5. [perf.data Output Format](#5-perfdata-output-format)
-6. [Usage Examples](#6-usage-examples)
-7. [Limitations and Trade-offs](#7-limitations-and-trade-offs)
-8. [Future Work](#8-future-work)
+6. [Limitations and Trade-offs](#6-limitations-and-trade-offs)
+7. [Future Work](#7-future-work)
 
 ---
 
-## 1. Introduction
+## 1. Overview
 
-### 1.1 Problem Statement
-
-Traditional Linux profilers force a choice between **on-CPU** and **off-CPU**
-analysis:
-
-- `perf record -e task-clock` samples only while the task is running on a CPU.
-  It reveals hot code paths but is blind to time spent sleeping, waiting on I/O,
-  or contending for locks.
-- Off-CPU profilers (e.g., `offcputime` from bcc/bpftrace) capture time spent
-  blocked but miss on-CPU activity entirely.
-
-Neither approach alone can answer the question: *"Where does my application
-spend its wall-clock time?"* A database query that takes 500 ms might spend
-50 ms on-CPU parsing SQL and 450 ms off-CPU waiting for disk I/O -- a
-task-clock profile would attribute 100% overhead to the parser, completely
-hiding the dominant bottleneck.
-
-### 1.2 What bperf Does
-
-**bperf** captures both on-CPU and off-CPU profiling data within a single
-unified event stream. It classifies *why* a task was off-CPU (runqueue wait,
-I/O wait, interruptible sleep, uninterruptible sleep, etc.) and writes
-everything into a standard `perf.data` file.
-
-The concept originates from the bperf paper (OSDI '24, Yonsei University),
-which introduced **blocked samples** via 26 kernel patches. This
-implementation achieves the same profiling capability using eBPF, requiring:
-
-- **No kernel source changes** -- works on stock kernels (6.1+) with BTF
-- **No perf tool changes** -- output is readable by unmodified `perf report`,
-  `perf script`, and flame graph tools
-- **A single userspace tool** (`bperf record`) that orchestrates BPF programs,
-  collects on-CPU samples via `perf_event_open(2)`, and writes the unified
-  output
-
-### 1.3 Minimum Requirements
-
-| Requirement             | Version / Config                          |
-|-------------------------|-------------------------------------------|
-| Linux kernel            | 6.1+ (LTS) with BTF enabled               |
-| `CONFIG_DEBUG_INFO_BTF` | `=y` (required for CO-RE and `tp_btf`)    |
-| `CONFIG_BPF_SYSCALL`    | `=y`                                      |
-| libbpf                  | 1.0+                                      |
-| clang/llvm              | 14+ (for BPF CO-RE compilation)           |
-| Frame pointers          | Recommended for user-space stack accuracy |
+This document covers the internal architecture of bperf. For project
+introduction, build instructions, and usage examples, see [README.md](README.md).
 
 ---
 
@@ -100,26 +56,26 @@ implementation achieves the same profiling capability using eBPF, requiring:
                      |                                  |
 +--------------------+----------------------------------+---------+
 |                    v         User Space               v         |
-|  +-------------------------------------------------------------+|
-|  |                   bperf record                               ||
-|  |                                                              ||
-|  |  1. Load & attach BPF programs                               ||
-|  |  2. Open perf_event_open(task-clock), mmap ring buffer       ||
-|  |  3. Poll both ring buffers                                   ||
-|  |  4. Merge on-CPU + off-CPU events by timestamp               ||
-|  |  5. Read /proc/<pid>/maps for MMAP2 records                  ||
-|  |  6. Dump STACK_TRACE map for callchain resolution            ||
-|  |  7. Write unified perf.data                                  ||
-|  +--------------------------+-----------------------------------+|
-|                             |                                    |
-|                             v                                    |
-|                     +------------+                               |
-|                     | perf.data  |                               |
-|                     +-----+------+                               |
-|                           |                                      |
-|              +------------+------------+                         |
-|              v            v            v                          |
-|        perf report   perf script   FlameGraph                    |
+|  +-----------------------------------------------------------+  |
+|  |                   bperf record                            |  |
+|  |                                                           |  |
+|  |  1. Load & attach BPF programs                            |  |
+|  |  2. Open perf_event_open(task-clock), mmap ring buffer    |  |
+|  |  3. Poll both ring buffers                                |  |
+|  |  4. Merge on-CPU + off-CPU events by timestamp            |  |
+|  |  5. Read /proc/<pid>/maps for MMAP2 records               |  |
+|  |  6. Dump STACK_TRACE map for callchain resolution         |  |
+|  |  7. Write unified perf.data                               |  |
+|  +--------------------------+--------------------------------+  |
+|                             |                                   |
+|                             v                                   |
+|                     +------------+                              |
+|                     | perf.data  |                              |
+|                     +-----+------+                              |
+|                           |                                     |
+|              +------------+------------+                        |
+|              v            v            v                        |
+|        perf report   perf script   FlameGraph                   |
 +-----------------------------------------------------------------+
 ```
 
@@ -143,7 +99,7 @@ implementation achieves the same profiling capability using eBPF, requiring:
 
 ### 2.3 BPF Maps
 
-| Map Name         | Type                        | Key             | Value                      | Purpose                                        |
+| Map Name         | Type                        | Key             | Value                      | Purpose                                         |
 |------------------|-----------------------------|-----------------|----------------------------|-------------------------------------------------|
 | `task_storage`   | `BPF_MAP_TYPE_TASK_STORAGE` | (implicit task) | `struct task_offcpu_data`  | Per-task sched-out timestamp, subclass, stacks  |
 | `stack_traces`   | `BPF_MAP_TYPE_STACK_TRACE`  | `u32` stack ID  | `u64[PERF_MAX_STACK_DEPTH]`| Deduplicated stack traces                       |
@@ -152,10 +108,15 @@ implementation achieves the same profiling capability using eBPF, requiring:
 
 ### 2.4 Filtering Strategy
 
-| Mode             | Mechanism                                                                      |
-|------------------|--------------------------------------------------------------------------------|
-| Single process   | Compare `prev->tgid` / `next->tgid` against target PID in config map           |
-| System-wide      | Profile all tasks (exclude kernel threads via `tgid == 0` check)               |
+| Mode                | Mechanism                                                                                                  |
+|---------------------|------------------------------------------------------------------------------------------------------------|
+| Process (`-p TGID`) | Compare `tgid` against `target_tgid`; opens one perf fd per thread via `/proc/TGID/task/`                  |
+| Thread (`-t TID`)   | Compare `tgid` against `target_tgid` AND `pid` against `target_tid` for off-CPU; single perf fd for on-CPU |
+| System-wide (`-a`)  | Profile all tasks (exclude kernel threads via `tgid == 0` check)                                           |
+
+The `-p`/`-t` auto-detection reads `/proc/PID/status` to get the real `Tgid`.
+If `Tgid == PID`, it is the process leader (enumerate all threads). Otherwise
+it is a specific thread (single-thread mode with TID filter in BPF).
 
 ---
 
@@ -201,6 +162,7 @@ enum offcpu_subclass {
 /* Runtime configuration (written by userspace before attach) */
 struct bperf_config {
     u32 target_tgid;        /* 0 = system-wide */
+    u32 target_tid;         /* 0 = all threads in tgid */
     u64 min_duration_ns;    /* ignore off-CPU episodes shorter than this */
 };
 ```
@@ -210,13 +172,13 @@ struct bperf_config {
 At schedule-out time, the BPF program inspects `prev->__state` and
 `prev->in_iowait` to classify the off-CPU reason:
 
-| Subclass                  | Condition                                   |
-|---------------------------|---------------------------------------------|
-| `OFFCPU_SUBCLASS_SCHED`  | `prev_state == TASK_RUNNING` (preempted)    |
-| `OFFCPU_SUBCLASS_IOWAIT` | `in_iowait` flag is set                     |
-| `OFFCPU_SUBCLASS_INTERRUPTIBLE` | `TASK_INTERRUPTIBLE`               |
-| `OFFCPU_SUBCLASS_UNINTERRUPTIBLE` | `TASK_UNINTERRUPTIBLE`           |
-| `OFFCPU_SUBCLASS_OTHER`  | Everything else (STOPPED, TRACED, etc.)     |
+| Subclass                          | Condition                                |
+|-----------------------------------|------------------------------------------|
+| `OFFCPU_SUBCLASS_SCHED`           | `prev_state == TASK_RUNNING` (preempted) |
+| `OFFCPU_SUBCLASS_IOWAIT`          | `in_iowait` flag is set                  |
+| `OFFCPU_SUBCLASS_INTERRUPTIBLE`   | `TASK_INTERRUPTIBLE`                     |
+| `OFFCPU_SUBCLASS_UNINTERRUPTIBLE` | `TASK_UNINTERRUPTIBLE`                   |
+| `OFFCPU_SUBCLASS_OTHER`           | Everything else (STOPPED, TRACED, etc.)  |
 
 **Note on `in_iowait`:** This field is a bit-field in `task_struct` and must
 be read with `BPF_CORE_READ_BITFIELD()`, not `BPF_CORE_READ()`.
@@ -257,50 +219,7 @@ struct task_struct *next)`. The `prev_state` must be read from
 
 ## 4. Userspace Tool
 
-### 4.1 CLI Interface
-
-```
-bperf record [OPTIONS] [-- command [args...]]
-
-OPTIONS:
-    -p, --pid <PID>         Profile a specific process (and all its threads)
-    -a, --all-cpus          System-wide profiling
-    -F, --freq <HZ>         On-CPU sampling frequency [default: 99]
-    --no-kernel             Exclude kernel call chains
-    --min-block <USEC>      Minimum off-CPU duration to record [default: 1]
-    -d, --duration <SEC>    Recording duration [default: until Ctrl-C]
-    -o, --output <FILE>     Output file [default: bperf.data]
-    --stack-depth <N>       Maximum stack depth [default: 127]
-    --ringbuf-size <MB>     BPF ring buffer size [default: 16]
-    --no-flamegraph         Skip SVG flamegraph generation
-```
-
-### 4.2 Source File Organization
-
-```
-bperf/
-+-- BUILD.md                # Build and test instructions
-+-- DESIGN.md               # This document
-+-- Makefile                 # Build system
-+-- vmlinux.h               # Generated: BTF header for CO-RE
-+-- test_workload.c          # Test program (CPU work + nanosleep cycles)
-+-- include/
-|   +-- bperf_common.h      # Shared structs between BPF and userspace
-|   +-- perf_file.h          # perf.data format definitions
-+-- src/
-|   +-- bperf.bpf.c          # BPF program (tp_btf/sched_switch handler)
-|   +-- bperf.c              # CLI entry point, argument parsing
-|   +-- record.c / record.h  # Recording orchestration (setup, main loop, finalize)
-|   +-- oncpu.c / oncpu.h    # On-CPU: perf_event_open, mmap ring buffer reader
-|   +-- offcpu.c / offcpu.h  # Off-CPU: BPF skeleton loader, ringbuf consumer
-|   +-- writer.c / writer.h  # perf.data file writer
-|   +-- proc.c / proc.h      # /proc parser (maps, comm, threads)
-+-- flamegraph/
-    +-- stackcollapse-perf.pl # Bundled: collapse perf script to folded stacks
-    +-- flamegraph.pl         # Bundled: render folded stacks as SVG
-```
-
-### 4.3 Recording Workflow
+### 4.1 Recording Workflow
 
 ```
 bperf record -p 1234 -F 99 -d 10 -o bperf.data
@@ -334,7 +253,7 @@ Phase 3: Finalize
   +- Generate SVG flamegraph (unless --no-flamegraph)
 ```
 
-### 4.4 Key Design Decisions
+### 4.2 Key Design Decisions
 
 **On-CPU records written verbatim:** `PERF_RECORD_SAMPLE` from the perf mmap
 ring buffer is already in the exact binary format expected by perf.data.
@@ -420,14 +339,14 @@ on-CPU (kernel-assigned, one per CPU in system-wide mode) and off-CPU
 by subclass for the BPF ring buffer, but in the perf.data output they all
 belong to the same unified event.
 
-| Event ID     | Origin                                           |
-|--------------|--------------------------------------------------|
-| kernel-assigned (per-CPU in system-wide) | On-CPU samples      |
-| 1001         | Off-CPU: runqueue wait (sched)                   |
-| 1002         | Off-CPU: I/O wait                                |
-| 1003         | Off-CPU: interruptible sleep                     |
-| 1004         | Off-CPU: uninterruptible sleep                   |
-| 1005         | Off-CPU: other (stopped, traced, etc.)           |
+| Event ID                                 | Origin                                 |
+|------------------------------------------|----------------------------------------|
+| kernel-assigned (per-CPU in system-wide) | On-CPU samples                         |
+| 1001                                     | Off-CPU: runqueue wait (sched)         |
+| 1002                                     | Off-CPU: I/O wait                      |
+| 1003                                     | Off-CPU: interruptible sleep           |
+| 1004                                     | Off-CPU: uninterruptible sleep         |
+| 1005                                     | Off-CPU: other (stopped, traced, etc.) |
 
 Off-CPU attrs reuse `type=PERF_TYPE_SOFTWARE, config=PERF_COUNT_SW_TASK_CLOCK`
 since the underlying event type doesn't matter for synthetic samples -- only
@@ -476,7 +395,7 @@ struct perf_file_header {
     struct perf_file_section attrs; /* offset, size of attrs section */
     struct perf_file_section data;  /* offset, size of data section */
     struct perf_file_section event_types; /* {0, 0} (legacy) */
-    u64 adds_features[4];          /* 256-bit feature flags */
+    u64 adds_features[4];           /* 256-bit feature flags */
 };
 ```
 
@@ -485,73 +404,9 @@ Feature bits set: `HEADER_CMDLINE` (bit 11), `HEADER_EVENT_DESC` (bit 12),
 
 ---
 
-## 6. Usage Examples
+## 6. Limitations and Trade-offs
 
-### 6.1 Profile a Single Process
-
-```bash
-# Record for 30 seconds at 99 Hz
-sudo bperf record -p 12345 -F 99 -d 30 -o bperf.data
-
-# View results with standard perf report
-perf report -i bperf.data --stdio
-```
-
-### 6.2 Profile a Command from Launch
-
-```bash
-sudo bperf record -- ./my_server --config server.conf
-# Press Ctrl-C to stop
-# -> outputs bperf.data + bperf.data.svg (wall-clock flamegraph)
-
-# Skip flamegraph generation
-sudo bperf record --no-flamegraph -- ./my_server --config server.conf
-```
-
-### 6.3 System-Wide Profiling
-
-```bash
-sudo bperf record -a -d 60 -o system.data
-perf report -i system.data --stdio
-```
-
-### 6.4 Filter Short Off-CPU Episodes
-
-```bash
-# Only record off-CPU episodes longer than 100 microseconds
-sudo bperf record -p 12345 --min-block 100 -o bperf.data
-```
-
-### 6.5 Custom Flame Graphs
-
-```bash
-# The default SVG is generated automatically; for custom flame graphs:
-perf script -i bperf.data \
-    | stackcollapse-perf.pl --all | flamegraph.pl \
-      --title "Wall Clock (on+off CPU)" > wall.svg
-```
-
-### 6.6 Interpreting the Output
-
-The output file contains a single `wall-clock` event that merges both on-CPU
-and off-CPU samples. In `perf report`, each sample's overhead reflects its
-wall-clock contribution because overhead is computed as
-`sum(period) / total_period`.
-
-| Sample Origin    | Meaning                                               |
-|------------------|-------------------------------------------------------|
-| On-CPU           | Task was running on a CPU (frequency-sampled)         |
-| Off-CPU          | Task was blocked (one sample per sleep episode)       |
-
-The `period` field of each sample represents **time in nanoseconds**:
-- On-CPU: the sampling interval (e.g., ~10 ms at 99 Hz)
-- Off-CPU: the actual off-CPU duration
-
----
-
-## 7. Limitations and Trade-offs
-
-### 7.1 Known Limitations
+### 6.1 Known Limitations
 
 **Frame Pointer Requirement:**
 User-space stack unwinding via `bpf_get_stackid(BPF_F_USER_STACK)` relies on
@@ -587,15 +442,15 @@ off-CPU duration, this approach emits one sample with `period = duration`.
 In practice this rarely matters -- `perf report` aggregates by overhead
 (sum of periods).
 
-### 7.2 Overhead Estimate
+### 6.2 Overhead Estimate
 
 | Component                    | Approximate Cost                             |
 |------------------------------|----------------------------------------------|
-| BPF program per sched_switch | ~200-500 ns (stack capture dominates)         |
+| BPF program per sched_switch | ~200-500 ns (stack capture dominates)        |
 | Stack capture (kernel)       | ~100-200 ns                                  |
-| Stack capture (user)         | ~100-400 ns (depends on stack depth)          |
+| Stack capture (user)         | ~100-400 ns (depends on stack depth)         |
 | Ring buffer write            | ~50-100 ns                                   |
-| perf task-clock sampling     | Same as standard `perf record -e task-clock`  |
+| perf task-clock sampling     | Same as standard `perf record -e task-clock` |
 | Total per context switch     | ~500-1200 ns (0.05-0.12% at 1M switches/sec) |
 
 For typical server workloads (1K-50K context switches/sec), the overhead is
@@ -603,7 +458,7 @@ negligible (<0.01% CPU).
 
 ---
 
-## 8. Future Work
+## 7. Future Work
 
 **DWARF-Based User Stack Unwinding:**
 The proposed `bpf_get_user_stack_buildid()` kfunc and SFrame-based unwinding

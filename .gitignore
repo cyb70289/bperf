@@ -9,6 +9,7 @@ vmlinux.h
 test_workload
 *.data
 *.svg
+!assets/*.svg
 
 # Editor / IDE
 *.swp
