@@ -228,11 +228,13 @@ int proc_add_kernel_map(struct proc_map_list *list)
 	}
 
 	uint64_t min_addr = UINT64_MAX, max_addr = 0;
+	uint64_t ktext = 0;
 	char line[256];
 	while (fgets(line, sizeof(line), fp)) {
 		uint64_t addr;
 		char type;
-		if (sscanf(line, "%lx %c", &addr, &type) < 2)
+		char name[256] = {0};
+		if (sscanf(line, "%lx %c %255s", &addr, &type, name) < 2)
 			continue;
 		if (addr == 0)
 			continue;
@@ -242,6 +244,8 @@ int proc_add_kernel_map(struct proc_map_list *list)
 			if (addr > max_addr)
 				max_addr = addr;
 		}
+		if (strcmp(name, "_text") == 0 && (type == 'T' || type == 't'))
+			ktext = addr;
 	}
 	fclose(fp);
 
@@ -252,6 +256,15 @@ int proc_add_kernel_map(struct proc_map_list *list)
 
 	m.addr = min_addr;
 	m.len = max_addr - min_addr + 4096;
+	/*
+	 * Set pgoff to the _text address.  The filename suffix "_text"
+	 * tells perf the ref_reloc_sym name is "_text", and pgoff
+	 * provides its address.  With pgoff matching the actual _text
+	 * symbol, perf computes zero relocation and resolves kernel
+	 * symbols correctly.  A zero pgoff would trigger a false
+	 * "Kernel address maps were restricted" warning.
+	 */
+	m.pgoff = ktext ? ktext : min_addr;
 	strncpy(m.filename, "[kernel.kallsyms]_text",
 		sizeof(m.filename) - 1);
 	m.prot = 5; /* r-x */
