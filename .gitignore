@@ -8,6 +8,7 @@ vmlinux.h
 # Test binaries and data
 test_workload
 *.data
+*.svg
 
 # Editor / IDE
 *.swp

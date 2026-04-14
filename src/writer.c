@@ -3,9 +3,9 @@
  * writer.c - perf.data file writer
  *
  * Writes a valid perf.data file with:
- *   - 6 event attrs + ID arrays (default), or 1 "wall-clock" attr (--combined)
+ *   - 1 "wall-clock" attr (all IDs merged)
  *   - COMM, MMAP2, and SAMPLE records (merged, time-sorted)
- *   - Feature sections (EVENT_DESC, CMDLINE, SAMPLE_TIME)
+ *   - Feature sections (EVENT_DESC, CMDLINE, SAMPLE_TIME, CLOCKID)
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -425,51 +425,30 @@ int writer_write(const struct writer_params *params,
 		attrs[i].sample_period = 1;
 	}
 
-	/*
-	 * Build per-attr ID info for writing attrs and EVENT_DESC.
-	 * attr[0] has nr_oncpu_ids IDs; attrs[1..5] have 1 ID each.
-	 */
-	struct event_id_info attr_ids[BPERF_NR_EVENTS];
+	/* ── Combined mode: single "wall-clock" attr with all IDs ──── */
 
-	attr_ids[0].ids = oncpu_ids;
-	attr_ids[0].nr  = nr_oncpu_ids;
-	for (int i = 1; i < BPERF_NR_EVENTS; i++) {
-		attr_ids[i].ids = &offcpu_ids[i - 1];
-		attr_ids[i].nr  = 1;
+	int nr_events = 1;
+	int nr_combined = nr_oncpu_ids + 5;
+	uint64_t *combined_ids = malloc(nr_combined * sizeof(uint64_t));
+	if (!combined_ids) {
+		close(fd);
+		return -1;
 	}
+	memcpy(combined_ids, oncpu_ids, nr_oncpu_ids * sizeof(uint64_t));
+	for (int i = 0; i < 5; i++)
+		combined_ids[nr_oncpu_ids + i] = offcpu_ids[i];
 
-	/* Event IDs array for off-CPU sample writing (indexed by event 0..5) */
+	struct event_id_info combined_id_info = {
+		.ids = combined_ids,
+		.nr = nr_combined,
+	};
+	struct event_id_info *write_id_info = &combined_id_info;
+
+	/* Event IDs for off-CPU sample writing (indexed by subclass 0..5) */
 	uint64_t event_ids[BPERF_NR_EVENTS];
 	event_ids[0] = oncpu_ids[0];
 	for (int i = 1; i < BPERF_NR_EVENTS; i++)
 		event_ids[i] = offcpu_ids[i - 1];
-
-	/* ── Combined mode: collapse all events into one ───────────── */
-
-	int nr_events;
-	struct event_id_info *write_id_info;
-	uint64_t *combined_ids = NULL;
-	struct event_id_info combined_id_info;
-
-	if (params->combined) {
-		nr_events = 1;
-		int nr_combined = nr_oncpu_ids + 5;
-		combined_ids = malloc(nr_combined * sizeof(uint64_t));
-		if (!combined_ids) {
-			close(fd);
-			return -1;
-		}
-		memcpy(combined_ids, oncpu_ids,
-		       nr_oncpu_ids * sizeof(uint64_t));
-		for (int i = 0; i < 5; i++)
-			combined_ids[nr_oncpu_ids + i] = offcpu_ids[i];
-		combined_id_info.ids = combined_ids;
-		combined_id_info.nr = nr_combined;
-		write_id_info = &combined_id_info;
-	} else {
-		nr_events = BPERF_NR_EVENTS;
-		write_id_info = attr_ids;
-	}
 
 	/* ── 2. Write placeholder file header ──────────────────────── */
 
@@ -667,9 +646,7 @@ write_features:;
 	/* Feature 1 (bit 12): EVENT_DESC */
 	feat_sections[1].offset = w.offset;
 	{
-		const char * const *names = params->combined
-			? &bperf_combined_event_name
-			: bperf_event_names;
+		const char * const *names = &bperf_combined_event_name;
 		write_event_desc(&w, attrs, write_id_info, names,
 				 nr_events);
 	}

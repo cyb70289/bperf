@@ -12,10 +12,10 @@
  * perf.data file writer.
  *
  * Writes a valid perf.data file with:
- *   - 6 event attrs (1 on-CPU + 5 off-CPU subclasses)
+ *   - 1 "wall-clock" attr (on-CPU + off-CPU merged)
  *   - COMM and MMAP2 records
  *   - Merged on-CPU + off-CPU SAMPLE records (time-sorted)
- *   - Feature sections (EVENT_DESC, CMDLINE, SAMPLE_TIME)
+ *   - Feature sections (EVENT_DESC, CMDLINE, SAMPLE_TIME, CLOCKID)
  */
 
 struct writer_params {
@@ -24,7 +24,6 @@ struct writer_params {
 	uint64_t                 oncpu_event_id;   /* first kernel-assigned ID */
 	const uint64_t          *oncpu_event_ids;  /* all per-CPU IDs (system-wide) */
 	int                      nr_oncpu_ids;     /* count of IDs */
-	int                      combined;         /* merge all events into one */
 	int                      argc;             /* for HEADER_CMDLINE */
 	char                   **argv;
 	struct kern_sym_info     kern_info;         /* for BPF frame filtering */

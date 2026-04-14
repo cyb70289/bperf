@@ -427,7 +427,6 @@ start_collection:
 		.output_path = opts->output,
 		.oncpu_attr = oncpu_get_attr(oncpu),
 		.oncpu_event_id = oncpu_get_event_id(oncpu),
-		.combined = opts->combined,
 		.argc = opts->prog_argc,
 		.argv = opts->prog_argv,
 		.kern_info = kern_info,
@@ -438,7 +437,7 @@ start_collection:
 			   &map_list, &thread_list);
 	if (ret == 0) {
 		fprintf(stderr, "bperf: output written to %s\n", opts->output);
-		if (opts->flamegraph)
+		if (!opts->no_flamegraph)
 			run_flamegraph_pipeline(opts->output);
 	} else {
 		fprintf(stderr, "bperf: failed to write output\n");

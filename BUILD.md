@@ -77,6 +77,10 @@ sudo ./bperf record -p $! -o bperf.data
 kill %1
 ```
 
+By default, bperf merges all on-CPU and off-CPU events into a single
+"wall-clock" event and generates an SVG flamegraph alongside the perf.data
+file. Use `--no-flamegraph` to skip SVG generation.
+
 Expected output:
 
 ```
@@ -94,6 +98,8 @@ bperf:   offcpu-uninterruptible: 0
 bperf:   offcpu-other: 0
 bperf: unique stacks: 74
 bperf: output written to bperf.data
+bperf: generating flamegraph...
+bperf: flamegraph written to bperf.data.svg
 ```
 
 ### 3. View results with standard perf tools
@@ -108,19 +114,14 @@ perf report -i bperf.data --stdio
 # Raw event dump (shows event names, callchains, durations)
 perf script -i bperf.data | head -40
 
-# Verify all 6 events are recognized
+# Verify the unified wall-clock event is recognized
 perf report -i bperf.data --header-only | grep "^# event"
 ```
 
-You should see all six events listed:
+You should see a single unified event:
 
 ```
-# event : name = task-clock, ...
-# event : name = offcpu-sched, ...
-# event : name = offcpu-iowait, ...
-# event : name = offcpu-interruptible, ...
-# event : name = offcpu-uninterruptible, ...
-# event : name = offcpu-other, ...
+# event : name = wall-clock, ...
 ```
 
 ### 4. System-wide test
@@ -144,28 +145,24 @@ perf report -i system.data --stdio | head -40
 
 ## Flamegraph Support
 
-bperf can generate an SVG flamegraph directly via the `--flamegraph` flag.
-This uses the bundled [FlameGraph](https://github.com/brendangregg/FlameGraph)
-scripts in the `flamegraph/` directory (no separate install needed).
+bperf generates an SVG flamegraph by default after each recording. This uses
+the bundled [FlameGraph](https://github.com/brendangregg/FlameGraph) scripts
+in the `flamegraph/` directory (no separate install needed).
 
 **Requirements:** `perl` (for the FlameGraph scripts) and `perf` (for `perf script`).
 
 ### Usage
 
 ```bash
-# Command-launch mode with flamegraph
-sudo ./bperf record --flamegraph -F 99 -o bperf.data -- ./test_workload
+# Default: generates both bperf.data and bperf.data.svg
+sudo ./bperf record -F 99 -o bperf.data -- ./test_workload
 
-# Profile a PID with flamegraph
-sudo ./bperf record --flamegraph -p 1234 -d 10 -o bperf.data
-
-# System-wide with flamegraph
-sudo ./bperf record --flamegraph -a -d 5 -o system.data
+# Skip flamegraph generation (perf.data only)
+sudo ./bperf record --no-flamegraph -F 99 -o bperf.data -- ./test_workload
 ```
 
-`--flamegraph` implies `--combined`, merging all on-CPU and off-CPU events
-into a single "wall-clock" event for a unified flamegraph. The output SVG is
-written next to the perf.data file (e.g. `bperf.data.svg`).
+The output SVG is written next to the perf.data file (e.g. `bperf.data.svg`).
+Open it in any browser for an interactive wall-clock flamegraph.
 
 ### Bundled scripts
 

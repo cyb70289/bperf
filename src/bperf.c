@@ -29,8 +29,7 @@ static void usage(void)
 "    -o, --output <FILE>     Output file [default: bperf.data]\n"
 "    --stack-depth <N>       Maximum stack depth [default: 127]\n"
 "    --ringbuf-size <MB>     BPF ring buffer size [default: 16]\n"
-"    --combined              Merge on/off-CPU into single wall-clock event\n"
-"    --flamegraph            Generate SVG flamegraph (implies --combined)\n"
+"    --no-flamegraph         Skip SVG flamegraph generation\n"
 "    -g                      Record call graphs (always on, ignored)\n"
 "    -h, --help              Show this help\n"
 "\n"
@@ -73,8 +72,7 @@ static int cmd_record(int argc, char **argv, int full_argc, char **full_argv)
 		{"output",       required_argument, 0, 'o'},
 		{"stack-depth",  required_argument, 0, 'S'},
 		{"ringbuf-size", required_argument, 0, 'R'},
-		{"combined",     no_argument,       0, 'C'},
-		{"flamegraph",   no_argument,       0, 'G'},
+		{"no-flamegraph", no_argument,     0, 'N'},
 		{"help",         no_argument,       0, 'h'},
 		{0, 0, 0, 0}
 	};
@@ -110,11 +108,8 @@ static int cmd_record(int argc, char **argv, int full_argc, char **full_argv)
 		case 'R':
 			opts.ringbuf_mb = atoi(optarg);
 			break;
-		case 'C':
-			opts.combined = 1;
-			break;
-		case 'G':
-			opts.flamegraph = 1;
+		case 'N':
+			opts.no_flamegraph = 1;
 			break;
 		case 'g':
 			/* Always on, ignore */
@@ -133,10 +128,6 @@ static int cmd_record(int argc, char **argv, int full_argc, char **full_argv)
 		opts.cmd_argc = argc - optind;
 		opts.cmd_argv = &argv[optind];
 	}
-
-	/* --flamegraph implies --combined */
-	if (opts.flamegraph)
-		opts.combined = 1;
 
 	/* Validate */
 	if (opts.pid <= 0 && !opts.system_wide && opts.cmd_argc == 0) {

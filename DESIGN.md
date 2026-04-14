@@ -272,6 +272,7 @@ OPTIONS:
     -o, --output <FILE>     Output file [default: bperf.data]
     --stack-depth <N>       Maximum stack depth [default: 127]
     --ringbuf-size <MB>     BPF ring buffer size [default: 16]
+    --no-flamegraph         Skip SVG flamegraph generation
 ```
 
 ### 4.2 Source File Organization
@@ -287,13 +288,16 @@ bperf/
 |   +-- bperf_common.h      # Shared structs between BPF and userspace
 |   +-- perf_file.h          # perf.data format definitions
 +-- src/
-    +-- bperf.bpf.c          # BPF program (tp_btf/sched_switch handler)
-    +-- bperf.c              # CLI entry point, argument parsing
-    +-- record.c / record.h  # Recording orchestration (setup, main loop, finalize)
-    +-- oncpu.c / oncpu.h    # On-CPU: perf_event_open, mmap ring buffer reader
-    +-- offcpu.c / offcpu.h  # Off-CPU: BPF skeleton loader, ringbuf consumer
-    +-- writer.c / writer.h  # perf.data file writer
-    +-- proc.c / proc.h      # /proc parser (maps, comm, threads)
+|   +-- bperf.bpf.c          # BPF program (tp_btf/sched_switch handler)
+|   +-- bperf.c              # CLI entry point, argument parsing
+|   +-- record.c / record.h  # Recording orchestration (setup, main loop, finalize)
+|   +-- oncpu.c / oncpu.h    # On-CPU: perf_event_open, mmap ring buffer reader
+|   +-- offcpu.c / offcpu.h  # Off-CPU: BPF skeleton loader, ringbuf consumer
+|   +-- writer.c / writer.h  # perf.data file writer
+|   +-- proc.c / proc.h      # /proc parser (maps, comm, threads)
++-- flamegraph/
+    +-- stackcollapse-perf.pl # Bundled: collapse perf script to folded stacks
+    +-- flamegraph.pl         # Bundled: render folded stacks as SVG
 ```
 
 ### 4.3 Recording Workflow
@@ -327,6 +331,7 @@ Phase 3: Finalize
   +- Dump stack_traces BPF map -> resolved IP arrays
   +- Sort all events by timestamp
   +- Write perf.data (see S5)
+  +- Generate SVG flamegraph (unless --no-flamegraph)
 ```
 
 ### 4.4 Key Design Decisions
@@ -357,32 +362,27 @@ time**.
 ```
 Offset 0x00:                 perf_file_header        (104 bytes)
 Offset 0x68:                 attrs section start
-                             +- attr[0] + ids_section  (on-CPU: task-clock)
-                             +- attr[1] + ids_section  (offcpu-sched)
-                             +- attr[2] + ids_section  (offcpu-iowait)
-                             +- attr[3] + ids_section  (offcpu-interruptible)
-                             +- attr[4] + ids_section  (offcpu-uninterruptible)
-                             +- attr[5] + ids_section  (offcpu-other)
+                             +- attr[0] + ids_section  (wall-clock)
 Offset A:                    ID arrays
-                             +- attr[0] IDs: N u64s (1 per CPU in sys-wide)
-                             +- attr[1..5] IDs: 1 u64 each
+                             +- attr[0] IDs: N+5 u64s (on-CPU per-CPU IDs + 5 off-CPU IDs)
 Offset B:                    data section start
                              +- PERF_RECORD_COMM records
                              +- PERF_RECORD_MMAP2 records
                              +- Non-SAMPLE on-CPU records (FORK, EXIT, etc.)
                              +- PERF_RECORD_SAMPLE records (merged, time-sorted)
-Offset C:                    feature section headers (3 x perf_file_section)
+Offset C:                    feature section headers (4 x perf_file_section)
 Offset D:                    feature data
                              +- HEADER_CMDLINE    (bit 11)
                              +- HEADER_EVENT_DESC (bit 12)
                              +- HEADER_SAMPLE_TIME (bit 21)
+                             +- HEADER_CLOCKID    (bit 23)
 ```
 
 Feature sections must be written in **bit order** of their feature IDs.
 
 ### 5.2 Sample Type
 
-All six event attributes share the same `sample_type`:
+The single "wall-clock" event attribute uses this `sample_type`:
 
 ```c
 #define BPERF_SAMPLE_TYPE ( \
@@ -414,17 +414,20 @@ u64                         weight;         /*  8 bytes */
 
 ### 5.3 Event Attributes
 
-Six `perf_event_attr` entries, differentiated by event IDs and named via
-`HEADER_EVENT_DESC`:
+A single `perf_event_attr` named `wall-clock` carries all event IDs -- both
+on-CPU (kernel-assigned, one per CPU in system-wide mode) and off-CPU
+(synthetic IDs 1001--1005). Internally, off-CPU samples are still classified
+by subclass for the BPF ring buffer, but in the perf.data output they all
+belong to the same unified event.
 
-| Index | Event Name               | Event ID     | Purpose              |
-|-------|--------------------------|--------------|----------------------|
-| 0     | `task-clock`             | kernel-assigned (per-CPU in system-wide) | On-CPU samples |
-| 1     | `offcpu-sched`           | 1001         | Off-CPU: runqueue    |
-| 2     | `offcpu-iowait`          | 1002         | Off-CPU: I/O wait    |
-| 3     | `offcpu-interruptible`   | 1003         | Off-CPU: voluntary   |
-| 4     | `offcpu-uninterruptible` | 1004         | Off-CPU: involuntary |
-| 5     | `offcpu-other`           | 1005         | Off-CPU: misc        |
+| Event ID     | Origin                                           |
+|--------------|--------------------------------------------------|
+| kernel-assigned (per-CPU in system-wide) | On-CPU samples      |
+| 1001         | Off-CPU: runqueue wait (sched)                   |
+| 1002         | Off-CPU: I/O wait                                |
+| 1003         | Off-CPU: interruptible sleep                     |
+| 1004         | Off-CPU: uninterruptible sleep                   |
+| 1005         | Off-CPU: other (stopped, traced, etc.)           |
 
 Off-CPU attrs reuse `type=PERF_TYPE_SOFTWARE, config=PERF_COUNT_SW_TASK_CLOCK`
 since the underlying event type doesn't matter for synthetic samples -- only
@@ -478,7 +481,7 @@ struct perf_file_header {
 ```
 
 Feature bits set: `HEADER_CMDLINE` (bit 11), `HEADER_EVENT_DESC` (bit 12),
-`HEADER_SAMPLE_TIME` (bit 21).
+`HEADER_SAMPLE_TIME` (bit 21), `HEADER_CLOCKID` (bit 23).
 
 ---
 
@@ -499,9 +502,10 @@ perf report -i bperf.data --stdio
 ```bash
 sudo bperf record -- ./my_server --config server.conf
 # Press Ctrl-C to stop
+# -> outputs bperf.data + bperf.data.svg (wall-clock flamegraph)
 
-# Generate a flame graph (all events combined = wall-clock profile)
-perf script -i bperf.data | stackcollapse-perf.pl | flamegraph.pl > wall.svg
+# Skip flamegraph generation
+sudo bperf record --no-flamegraph -- ./my_server --config server.conf
 ```
 
 ### 6.3 System-Wide Profiling
@@ -518,43 +522,30 @@ perf report -i system.data --stdio
 sudo bperf record -p 12345 --min-block 100 -o bperf.data
 ```
 
-### 6.5 Separate Flame Graphs per Event Type
+### 6.5 Custom Flame Graphs
 
 ```bash
-# On-CPU flame graph
-perf script -i bperf.data --event task-clock \
-    | stackcollapse-perf.pl | flamegraph.pl \
-      --title "On-CPU" --color hot > oncpu.svg
-
-# Off-CPU flame graph (all subclasses)
+# The default SVG is generated automatically; for custom flame graphs:
 perf script -i bperf.data \
-    --event offcpu-sched,offcpu-iowait,offcpu-interruptible,offcpu-uninterruptible \
-    | stackcollapse-perf.pl | flamegraph.pl \
-      --title "Off-CPU" --color io > offcpu.svg
-
-# Combined wall-clock flame graph
-perf script -i bperf.data \
-    | stackcollapse-perf.pl | flamegraph.pl \
+    | stackcollapse-perf.pl --all | flamegraph.pl \
       --title "Wall Clock (on+off CPU)" > wall.svg
 ```
 
 ### 6.6 Interpreting the Output
 
-| Event Name                | Meaning                                               |
-|---------------------------|-------------------------------------------------------|
-| `task-clock`              | Task was running on a CPU                             |
-| `offcpu-sched`            | Task was runnable but waiting for a CPU (preempted)   |
-| `offcpu-iowait`           | Task was waiting for I/O completion                   |
-| `offcpu-interruptible`    | Task was in voluntary sleep (futex, poll, sleep)      |
-| `offcpu-uninterruptible`  | Task was in mandatory sleep (page fault, NFS)         |
-| `offcpu-other`            | Task was stopped, traced, or in another state         |
+The output file contains a single `wall-clock` event that merges both on-CPU
+and off-CPU samples. In `perf report`, each sample's overhead reflects its
+wall-clock contribution because overhead is computed as
+`sum(period) / total_period`.
+
+| Sample Origin    | Meaning                                               |
+|------------------|-------------------------------------------------------|
+| On-CPU           | Task was running on a CPU (frequency-sampled)         |
+| Off-CPU          | Task was blocked (one sample per sleep episode)       |
 
 The `period` field of each sample represents **time in nanoseconds**:
 - On-CPU: the sampling interval (e.g., ~10 ms at 99 Hz)
 - Off-CPU: the actual off-CPU duration
-
-The `Overhead` column in `perf report` correctly reflects wall-clock
-contribution because overhead is computed as `sum(period) / total_period`.
 
 ---
 
@@ -581,9 +572,10 @@ with many unique call stacks can fill the map, causing `bpf_get_stackid()` to
 return `-EEXIST`.
 
 **Timestamp Correlation:**
-On-CPU samples use the perf clock while BPF uses `bpf_ktime_get_ns()`
-(`clock_monotonic`). These are close but not identical on most systems. Small
-ordering errors may occur at merge boundaries.
+On-CPU samples use `CLOCK_MONOTONIC` (via `attr.use_clockid = 1`) and BPF
+uses `bpf_ktime_get_ns()` which is also `CLOCK_MONOTONIC`. Both clock
+sources are aligned; events from both paths interleave correctly when
+sorted by timestamp.
 
 **No DWARF Unwinding:**
 BPF helpers cannot perform DWARF-based stack unwinding. This is a hard
