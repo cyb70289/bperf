@@ -119,6 +119,29 @@ sudo ./bperf record -- ./my_server --config server.conf
 sudo ./bperf record --no-flamegraph -p 12345 -d 10
 ```
 
+### Tip: profiling multi-threaded processes
+
+For processes that spread work across many threads (databases, web servers,
+thread pools), profiling the whole process with `-p TGID` aggregates all
+threads into one flamegraph. This can obscure the bottleneck: a worker thread
+blocked on I/O is buried among dozens of idle threads, diluting its signal.
+
+**Recommendation**: identify the thread doing the work you care about and
+profile it directly with `-t TID`. This gives a clean wall-clock view of
+exactly that thread's on-CPU and off-CPU activity with no noise from unrelated
+threads.
+
+```bash
+# Find threads of a process and their CPU usage
+ps -T -p <PID> -o tid,comm,%cpu --sort=-%cpu | head -20
+
+# Profile the busiest worker thread specifically
+sudo ./bperf record -t <TID> -d 30
+```
+
+Whole-process mode (`-p TGID`) is still useful for getting an overview or when
+you do not know which thread to focus on yet.
+
 ### Viewing results
 
 ```bash
