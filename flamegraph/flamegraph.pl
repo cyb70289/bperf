@@ -142,8 +142,8 @@ USAGE: $0 [options] infile > outfile.svg\n
 	--countname TEXT # count type label (default "samples")
 	--nametype TEXT  # name type label (default "Function:")
 	--colors PALETTE # set color palette. choices are: hot (default), mem,
-	                 # io, wakeup, chain, java, js, perl, red, green, blue,
-	                 # aqua, yellow, purple, orange
+	                 # io, wakeup, chain, java, js, perl, wallclock, red,
+	                 # green, blue, aqua, yellow, purple, orange
 	--bgcolors COLOR # set background colors. gradient choices are yellow
 	                 # (default), blue, green, grey; flat colors use "#rrggbb"
 	--hash           # colors are keyed by function name hash
@@ -504,6 +504,18 @@ sub color {
 			$type = "aqua"
 		} else {			# off-CPU
 			$type = "blue";
+		}
+		# fall-through to color palettes
+	}
+	if (defined $type and $type eq "wallclock") {
+		# Wall-clock palette for bperf: warm (red) for on-CPU,
+		# cold (blue) for off-CPU, orange for on-CPU kernel.
+		if ($name =~ m:_\[o\]$:) {	# off-CPU annotation
+			$type = "blue";
+		} elsif ($name =~ m:_\[k\]$:) {	# kernel (on-CPU)
+			$type = "orange";
+		} else {			# user (on-CPU)
+			$type = "red";
 		}
 		# fall-through to color palettes
 	}
@@ -1249,7 +1261,7 @@ while (my ($id, $node) = each %Node) {
 		$escaped_func =~ s/</&lt;/g;
 		$escaped_func =~ s/>/&gt;/g;
 		$escaped_func =~ s/"/&quot;/g;
-		$escaped_func =~ s/_\[[kwij]\]$//;	# strip any annotation
+		$escaped_func =~ s/_\[[kwijo]\]$//;	# strip any annotation
 		unless (defined $delta) {
 			$info = "$escaped_func ($samples_txt $countname, $pct%)";
 		} else {
@@ -1281,7 +1293,7 @@ while (my ($id, $node) = each %Node) {
 	my $chars = int( ($x2 - $x1) / ($fontsize * $fontwidth));
 	my $text = "";
 	if ($chars >= 3) { # room for one char plus two dots
-		$func =~ s/_\[[kwij]\]$//;	# strip any annotation
+		$func =~ s/_\[[kwijo]\]$//;	# strip any annotation
 		$text = substr $func, 0, $chars;
 		substr($text, -2, 2) = ".." if $chars < length $func;
 		$text =~ s/&/&amp;/g;

@@ -86,7 +86,8 @@ static int run_flamegraph_pipeline(const char *data_path)
 	/* Build and run the pipeline */
 	char cmd[PATH_MAX * 4];
 	snprintf(cmd, sizeof(cmd),
-		 "perf script -i '%s' | '%s' --all | '%s' > '%s'",
+		 "perf script -i '%s' | '%s' --all | '%s' --color=wallclock"
+		 " --title='bperf Wall Clock' --countname=ns > '%s'",
 		 data_path, collapse_path, flamegraph_path, svg_path);
 
 	fprintf(stderr, "bperf: generating flamegraph...\n");

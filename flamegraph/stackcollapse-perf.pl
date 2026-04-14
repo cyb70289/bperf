@@ -74,6 +74,7 @@ sub remember_stack {
 }
 my $annotate_kernel = 0; # put an annotation on kernel function
 my $annotate_jit = 0;   # put an annotation on jit symbols
+my $annotate_offcpu = 0; # put _[o] annotation on off-CPU frames
 my $annotate_all = 0;   # enale all annotations
 my $include_pname = 1;	# include process names in stacks
 my $include_pid = 0;	# include process ID with process name
@@ -96,6 +97,7 @@ GetOptions('inline' => \$show_inline,
            'pid' => \$include_pid,
            'kernel' => \$annotate_kernel,
            'jit' => \$annotate_jit,
+           'offcpu' => \$annotate_offcpu,
            'all' => \$annotate_all,
            'tid' => \$include_tid,
            'addrs' => \$include_addrs,
@@ -105,9 +107,10 @@ USAGE: $0 [options] infile > outfile\n
 	--pid		# include PID with process names [1]
 	--tid		# include TID and PID with process names [1]
 	--inline	# un-inline using addr2line
-	--all		# all annotations (--kernel --jit)
+	--all		# all annotations (--kernel --jit --offcpu)
 	--kernel	# annotate kernel functions with a _[k]
 	--jit		# annotate jit functions with a _[j]
+	--offcpu	# annotate off-CPU frames with a _[o]
 	--context	# adds source context to --inline
 	--srcline	# parses output of 'perf script -F+srcline' and adds source context
 	--addrs		# include raw addresses where symbols can't be found
@@ -120,7 +123,7 @@ USAGE: $0 [options] infile > outfile\n
 USAGE_END
 
 if ($annotate_all) {
-	$annotate_kernel = $annotate_jit = 1;
+	$annotate_kernel = $annotate_jit = $annotate_offcpu = 1;
 }
 
 my %inlineCache;
@@ -198,6 +201,7 @@ my $pname;
 my $m_pid;
 my $m_tid;
 my $m_period;
+my $is_offcpu;
 
 #
 # Main loop
@@ -225,6 +229,17 @@ while (defined($_ = <>)) {
 	if (m/^$/) {
 		# ignore filtered samples
 		next if not $pname;
+
+		# Off-CPU annotation: if this sample was detected as off-CPU,
+		# replace all frame annotations with _[o] (cold/blue in
+		# wallclock palette).  This overrides _[k]/_[j] so the
+		# entire off-CPU stack is colored uniformly.
+		if ($annotate_offcpu && $is_offcpu) {
+			for my $i (0 .. $#stack) {
+				$stack[$i] =~ s/_\[[a-z]\]$//;
+				$stack[$i] .= "_[o]";
+			}
+		}
 
 		if ($include_pname) {
 			if (defined $pname) {
@@ -283,6 +298,7 @@ while (defined($_ = <>)) {
 			$period = 1
 		}
 		($m_pid, $m_tid, $m_period) = ($pid, $tid, $period);
+		$is_offcpu = 0;
 
 		if ($include_tid) {
 			$pname = "$comm-$m_pid/$m_tid";
@@ -317,6 +333,12 @@ while (defined($_ = <>)) {
 		# 7fffb84c9afc cpu_startup_entry+0x800047c022ec ([kernel.kallsyms])
 		# strip these off:
 		$rawfunc =~ s/\+0x[\da-f]+$//;
+
+		# Detect off-CPU samples: stacks from sched_switch always
+		# pass through schedule/__schedule.
+		if ($annotate_offcpu && $rawfunc =~ /^(__)?schedule$/) {
+			$is_offcpu = 1;
+		}
 
 		next if $rawfunc =~ /^\(/;		# skip process names
 
