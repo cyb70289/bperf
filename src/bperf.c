@@ -20,7 +20,8 @@ static void usage(void)
 "    bperf record [OPTIONS] [-- command [args...]]\n"
 "\n"
 "RECORD OPTIONS:\n"
-"    -p, --pid <PID>         Profile a specific process\n"
+"    -p, --pid <PID>         Profile a specific process or thread\n"
+"    -t, --tid <TID>         Alias for -p (same behavior)\n"
 "    -a, --all-cpus          System-wide profiling\n"
 "    -F, --freq <HZ>         On-CPU sampling frequency [default: 99]\n"
 "    --no-kernel             Exclude kernel call chains\n"
@@ -64,6 +65,7 @@ static int cmd_record(int argc, char **argv, int full_argc, char **full_argv)
 
 	static struct option long_options[] = {
 		{"pid",          required_argument, 0, 'p'},
+		{"tid",          required_argument, 0, 't'},
 		{"all-cpus",     no_argument,       0, 'a'},
 		{"freq",         required_argument, 0, 'F'},
 		{"no-kernel",    no_argument,       0, 'K'},
@@ -78,10 +80,11 @@ static int cmd_record(int argc, char **argv, int full_argc, char **full_argv)
 	};
 
 	int opt;
-	while ((opt = getopt_long(argc, argv, "p:aF:gd:o:h",
+	while ((opt = getopt_long(argc, argv, "p:t:aF:gd:o:h",
 				  long_options, NULL)) != -1) {
 		switch (opt) {
 		case 'p':
+		case 't':
 			opts.pid = atoi(optarg);
 			break;
 		case 'a':
