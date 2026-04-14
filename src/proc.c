@@ -319,3 +319,24 @@ int proc_read_kern_sym_info(struct kern_sym_info *info)
 
 	return 0;
 }
+
+/* ── Read TGID from /proc/PID/status ─────────────────────────────── */
+
+pid_t proc_read_tgid(pid_t pid)
+{
+	char path[64];
+	snprintf(path, sizeof(path), "/proc/%d/status", pid);
+
+	FILE *fp = fopen(path, "r");
+	if (!fp)
+		return -1;
+
+	pid_t tgid = -1;
+	char line[256];
+	while (fgets(line, sizeof(line), fp)) {
+		if (sscanf(line, "Tgid:\t%d", &tgid) == 1)
+			break;
+	}
+	fclose(fp);
+	return tgid;
+}

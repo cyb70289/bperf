@@ -166,6 +166,32 @@ struct oncpu_ctx *oncpu_open(const struct oncpu_params *params)
 			ctx->mmaps[cpu].fd = fd;
 			ctx->fds[cpu] = fd;
 		}
+	} else if (params->nr_tids > 0 && params->tids) {
+		/*
+		 * Per-process: one fd per thread.
+		 * The caller enumerated /proc/TGID/task/ and passed us
+		 * the thread list.
+		 */
+		int nt = params->nr_tids;
+		ctx->nr_mmaps = nt;
+		ctx->mmaps = calloc(nt, sizeof(*ctx->mmaps));
+		ctx->fds = calloc(nt, sizeof(int));
+		if (!ctx->mmaps || !ctx->fds)
+			goto err;
+
+		for (int i = 0; i < nt; i++) {
+			int fd = perf_event_open(attr, params->tids[i], -1, -1,
+						 PERF_FLAG_FD_CLOEXEC);
+			if (fd < 0) {
+				fprintf(stderr,
+					"perf_event_open(tid=%d): %s\n",
+					params->tids[i], strerror(errno));
+				ctx->nr_mmaps = i;
+				goto err;
+			}
+			ctx->mmaps[i].fd = fd;
+			ctx->fds[i] = fd;
+		}
 	} else {
 		/* Per-PID: one fd, any CPU */
 		ctx->nr_mmaps = 1;

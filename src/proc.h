@@ -53,6 +53,12 @@ int proc_read_threads(pid_t pid, struct proc_thread_list *list);
 int proc_add_kernel_map(struct proc_map_list *list);
 
 /*
+ * Read the TGID (thread group ID) for a given PID/TID from /proc/PID/status.
+ * Returns the TGID on success, or -1 on error.
+ */
+pid_t proc_read_tgid(pid_t pid);
+
+/*
  * Kernel symbol info for filtering BPF JIT frames from off-CPU
  * kernel stacks.  The vmlinux core text range (_stext to _etext)
  * excludes modules and BPF JIT regions.

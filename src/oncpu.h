@@ -24,6 +24,8 @@ struct oncpu_params {
 	int      exclude_kernel;  /* 1 = exclude kernel stacks */
 	int      max_stack;       /* max stack depth */
 	int      mmap_pages;      /* ring buffer size in pages (power of 2) */
+	pid_t   *tids;            /* thread IDs to monitor (NULL = just use pid) */
+	int      nr_tids;         /* number of entries in tids[] */
 };
 
 /* A buffered raw record from the perf mmap ring */

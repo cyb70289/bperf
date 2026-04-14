@@ -221,37 +221,120 @@ int record_run(struct record_opts *opts)
 		int system_wide = opts->system_wide;
 
 		if (target_pid > 0) {
-			fprintf(stderr, "bperf: profiling PID %d at %d Hz\n",
-				target_pid, opts->freq);
+			/*
+			 * Determine if the user gave us a TGID (process leader)
+			 * or a TID (specific thread).  This affects:
+			 *  - on-CPU: TGID → enumerate all threads; TID → single thread
+			 *  - off-CPU: always filter by real TGID, optionally by TID
+			 */
+			pid_t real_tgid = proc_read_tgid(target_pid);
+			if (real_tgid < 0) {
+				fprintf(stderr, "bperf: cannot read /proc/%d/status: "
+					"process not found?\n", target_pid);
+				goto out;
+			}
+
+			pid_t offcpu_tid = 0; /* 0 = all threads */
+			if (real_tgid == target_pid) {
+				/* User gave us the TGID — profile entire process */
+				fprintf(stderr, "bperf: profiling process %d "
+					"(all threads) at %d Hz\n",
+					target_pid, opts->freq);
+			} else {
+				/* User gave us a TID — profile that thread only */
+				fprintf(stderr, "bperf: profiling thread %d "
+					"(process %d) at %d Hz\n",
+					target_pid, real_tgid, opts->freq);
+				offcpu_tid = target_pid;
+			}
+
+			/*
+			 * On-CPU: if profiling the whole process, enumerate
+			 * all threads and open one perf event per thread.
+			 * If profiling a single thread, use the TID directly.
+			 */
+			struct oncpu_params oncpu_params = {
+				.pid = target_pid,
+				.freq = opts->freq,
+				.system_wide = 0,
+				.exclude_kernel = opts->exclude_kernel,
+				.max_stack = opts->max_stack,
+			};
+
+			struct proc_thread_list tid_list;
+			proc_thread_list_init(&tid_list);
+
+			if (real_tgid == target_pid) {
+				proc_read_threads(real_tgid, &tid_list);
+				if (tid_list.nr > 0) {
+					pid_t *tids = malloc(tid_list.nr * sizeof(pid_t));
+					if (tids) {
+						for (int i = 0; i < tid_list.nr; i++)
+							tids[i] = tid_list.threads[i].tid;
+						oncpu_params.tids = tids;
+						oncpu_params.nr_tids = tid_list.nr;
+					}
+				}
+			}
+
+			oncpu = oncpu_open(&oncpu_params);
+			free(oncpu_params.tids);
+			if (!oncpu) {
+				proc_thread_list_free(&tid_list);
+				fprintf(stderr, "bperf: failed to set up on-CPU profiling\n");
+				goto out;
+			}
+
+			/* Off-CPU: always use real TGID; optionally filter by TID */
+			struct offcpu_params offcpu_params = {
+				.target_tgid = (uint32_t)real_tgid,
+				.target_tid = (uint32_t)offcpu_tid,
+				.min_duration_ns = (uint64_t)opts->min_block_us * 1000,
+				.ringbuf_size = (uint32_t)opts->ringbuf_mb * 1024 * 1024,
+			};
+			offcpu = offcpu_open(&offcpu_params);
+			proc_thread_list_free(&tid_list);
+			if (!offcpu) {
+				fprintf(stderr, "bperf: failed to set up off-CPU profiling\n");
+				goto out;
+			}
+
+			/*
+			 * For /proc reads later, use the TGID so we get maps/threads
+			 * for the whole process regardless of single-thread mode.
+			 */
+			opts->pid = real_tgid;
+
 		} else if (system_wide) {
 			fprintf(stderr, "bperf: system-wide profiling at %d Hz\n",
 				opts->freq);
+
+			struct oncpu_params oncpu_params = {
+				.pid = -1,
+				.freq = opts->freq,
+				.system_wide = 1,
+				.exclude_kernel = opts->exclude_kernel,
+				.max_stack = opts->max_stack,
+			};
+			oncpu = oncpu_open(&oncpu_params);
+			if (!oncpu) {
+				fprintf(stderr, "bperf: failed to set up on-CPU profiling\n");
+				goto out;
+			}
+
+			struct offcpu_params offcpu_params = {
+				.target_tgid = 0,
+				.target_tid = 0,
+				.min_duration_ns = (uint64_t)opts->min_block_us * 1000,
+				.ringbuf_size = (uint32_t)opts->ringbuf_mb * 1024 * 1024,
+			};
+			offcpu = offcpu_open(&offcpu_params);
+			if (!offcpu) {
+				fprintf(stderr, "bperf: failed to set up off-CPU profiling\n");
+				goto out;
+			}
 		} else {
 			fprintf(stderr, "bperf: no target specified, use -p PID, -a, or -- command\n");
-			goto out;
-		}
-
-		struct oncpu_params oncpu_params = {
-			.pid = system_wide ? -1 : target_pid,
-			.freq = opts->freq,
-			.system_wide = system_wide,
-			.exclude_kernel = opts->exclude_kernel,
-			.max_stack = opts->max_stack,
-		};
-		oncpu = oncpu_open(&oncpu_params);
-		if (!oncpu) {
-			fprintf(stderr, "bperf: failed to set up on-CPU profiling\n");
-			goto out;
-		}
-
-		struct offcpu_params offcpu_params = {
-			.target_tgid = system_wide ? 0 : (uint32_t)target_pid,
-			.min_duration_ns = (uint64_t)opts->min_block_us * 1000,
-			.ringbuf_size = (uint32_t)opts->ringbuf_mb * 1024 * 1024,
-		};
-		offcpu = offcpu_open(&offcpu_params);
-		if (!offcpu) {
-			fprintf(stderr, "bperf: failed to set up off-CPU profiling\n");
 			goto out;
 		}
 	}

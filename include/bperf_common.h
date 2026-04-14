@@ -55,7 +55,7 @@ struct offcpu_event {
 /* Runtime configuration (written by userspace before attach) */
 struct bperf_config {
 	u32 target_tgid;     /* 0 = system-wide */
-	u32 pad;
+	u32 target_tid;      /* 0 = all threads in tgid */
 	u64 min_duration_ns; /* ignore off-CPU episodes shorter than this */
 };
 

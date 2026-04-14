@@ -131,6 +131,7 @@ struct offcpu_ctx *offcpu_open(const struct offcpu_params *params)
 	/* Write config to BPF map */
 	struct bperf_config cfg = {
 		.target_tgid = params->target_tgid,
+		.target_tid = params->target_tid,
 		.min_duration_ns = params->min_duration_ns,
 	};
 	uint32_t key = 0;

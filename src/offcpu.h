@@ -13,6 +13,7 @@ struct offcpu_ctx;
 
 struct offcpu_params {
 	uint32_t target_tgid;     /* 0 = system-wide */
+	uint32_t target_tid;      /* 0 = all threads in tgid */
 	uint64_t min_duration_ns; /* minimum off-CPU episode duration */
 	uint32_t ringbuf_size;    /* ring buffer size in bytes */
 };

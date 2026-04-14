@@ -93,7 +93,7 @@ int BPF_PROG(handle_sched_switch,
 {
 	u32 zero = 0;
 	struct bperf_config *cfg;
-	u32 prev_tgid, next_tgid, target;
+	u32 prev_tgid, next_tgid, prev_tid, next_tid, target, target_tid;
 
 	cfg = bpf_map_lookup_elem(&bperf_cfg, &zero);
 	if (!cfg)
@@ -101,7 +101,10 @@ int BPF_PROG(handle_sched_switch,
 
 	prev_tgid = BPF_CORE_READ(prev, tgid);
 	next_tgid = BPF_CORE_READ(next, tgid);
+	prev_tid = BPF_CORE_READ(prev, pid);
+	next_tid = BPF_CORE_READ(next, pid);
 	target = cfg->target_tgid;
+	target_tid = cfg->target_tid;
 
 	/*
 	 * Phase 1: SCHED-OUT — record state for the outgoing task (prev).
@@ -110,6 +113,10 @@ int BPF_PROG(handle_sched_switch,
 	 * page tables are still active, so BPF_F_USER_STACK works.
 	 */
 	if (target == 0 || prev_tgid == target) {
+		/* If filtering by TID, skip non-matching threads */
+		if (target_tid && prev_tid != target_tid)
+			goto phase2;
+
 		/* Skip kernel threads (tgid == 0) in system-wide mode */
 		if (prev_tgid == 0)
 			goto phase2;
@@ -142,6 +149,10 @@ phase2:
 	 */
 	if (target == 0 || next_tgid == target) {
 		if (next_tgid == 0)
+			return 0;
+
+		/* If filtering by TID, skip non-matching threads */
+		if (target_tid && next_tid != target_tid)
 			return 0;
 
 		struct task_offcpu_data *data;
