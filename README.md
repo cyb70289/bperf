@@ -43,6 +43,8 @@ and perf.data output format.
 | libelf | any | libelf-dev |
 | bpftool | 5.15+ | 7.4.0 |
 
+**NOTE:** Install `pahole` package before reconfigure and build linux kernel.
+
 **Architecture:** Tested on aarch64 (ARM). Should work on x86_64 without
 changes (the Makefile auto-detects `uname -m`).
 
@@ -56,7 +58,7 @@ Ubuntu/Debian:
 sudo apt-get install -y \
     clang-18 llvm-18 \
     libbpf-dev libelf-dev zlib1g-dev \
-    linux-tools-common bpftool
+    linux-tools-common bpftool pahole
 ```
 
 If `bpftool` is not available as a package, it can be built from the kernel
