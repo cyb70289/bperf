@@ -521,8 +521,6 @@ start_collection:
 			   &map_list, &thread_list);
 	if (ret == 0) {
 		fprintf(stderr, "bperf: output written to %s\n", opts->output);
-		if (!opts->no_flamegraph)
-			run_flamegraph_pipeline(opts->output);
 	} else {
 		fprintf(stderr, "bperf: failed to write output\n");
 	}
@@ -537,6 +535,9 @@ out:
 	resolved_stack_map_free(&stack_map);
 	proc_map_list_free(&map_list);
 	proc_thread_list_free(&thread_list);
+
+    if (ret == 0 && !opts->no_flamegraph)
+		run_flamegraph_pipeline(opts->output);
 
 	/* Reap child */
 	if (child_pid > 0) {
